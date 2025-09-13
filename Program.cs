@@ -1,61 +1,363 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.SqlClient;
 using System.IO;
+using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
-using GeneralSQLToSharp;
 
-namespace CodeGenDemo
+namespace SqlToCSharpGenerator
 {
     class Program
     {
-        static async Task Main(string[] args)
+        static void Main(string[] args)
         {
             string connectionString = "Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=t020808;TrustServerCertificate=True;MultipleActiveResultSets=True;";
-            string outputDir = Path.Combine(Directory.GetCurrentDirectory(), "Generated");
-            Directory.CreateDirectory(outputDir);
+            string outputPath = @"D:\Temp\Code\";
 
-            using var conn = new SqlConnection(connectionString);
-            await conn.OpenAsync();
-
-            var tables = new List<string>();
-            using (var cmd = new SqlCommand("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE'", conn))
-            using (var reader = await cmd.ExecuteReaderAsync())
-            {
-                while (await reader.ReadAsync())
-                {
-                    tables.Add(reader.GetString(0));
-                }
-            }
-
+            var tables = GetTables(connectionString);
             foreach (var table in tables)
             {
-                var cols = new List<(string Name, string Type)>();
-                using (var cmd = new SqlCommand($"SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='{table}'", conn))
-                using (var reader = await cmd.ExecuteReaderAsync())
-                {
-                    while (await reader.ReadAsync())
-                    {
-                        cols.Add((reader.GetString(0), reader.GetString(1)));
-                    }
-                }
+                var columns = GetColumns(connectionString, table);
+                var fks = GetForeignKeys(connectionString, table);
 
-                // Gọi các generator
-                CodeGeneratordone.GenerateEntity(table, cols, outputDir);
-                CodeGeneratordone.GenerateRequest(table, cols, outputDir);
-                CodeGeneratordone.GenerateResponse(table, cols, outputDir);
-                CodeGeneratordone.GenerateRepository(table, cols, outputDir);
-                CodeGeneratordone.GenerateService(table, cols, outputDir);
-                CodeGeneratordone.GenerateController(table, cols, outputDir);
-                CodeGeneratordone.GenerateRepositoryImpl(table, cols, outputDir);
-                CodeGeneratordone.GenerateServiceImpl(table, cols, outputDir);
+                WriteToFile(Path.Combine(outputPath, "Entities", table + "Entity.cs"), GenerateEntity(table, columns, fks));
+                WriteToFile(Path.Combine(outputPath, "Requests", table + "Request.cs"), GenerateRequest(table, columns));
+                WriteToFile(Path.Combine(outputPath, "Responses", table + "Response.cs"), GenerateResponse(table, columns, fks));
+                WriteToFile(Path.Combine(outputPath, "Repositories", "I" + table + "Repository.cs"), GenerateRepositoryInterface(table));
+                WriteToFile(Path.Combine(outputPath, "Repositories", table + "Repository.cs"), GenerateRepositoryImpl(table, columns, fks));
+                WriteToFile(Path.Combine(outputPath, "Services", "I" + table + "Service.cs"), GenerateServiceInterface(table));
+                WriteToFile(Path.Combine(outputPath, "Services", table + "Service.cs"), GenerateServiceImpl(table));
+                WriteToFile(Path.Combine(outputPath, "Controllers", table + "Controller.cs"), GenerateController(table));
             }
 
-            Console.WriteLine("✅ Code generated successfully!");
+            Console.WriteLine("Code generation completed!");
+        }
+
+        #region Utilities
+        private static void WriteToFile(string path, string content)
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(path, content);
+        }
+
+        private static List<string> GetTables(string connStr)
+        {
+            var tables = new List<string>();
+            using (var conn = new SqlConnection(connStr))
+            {
+                conn.Open();
+                var cmd = new SqlCommand("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE'", conn);
+                var reader = cmd.ExecuteReader();
+                while (reader.Read()) tables.Add(reader.GetString(0));
+            }
+            return tables;
+        }
+
+        private static List<ColumnInfo> GetColumns(string connStr, string table)
+        {
+            var cols = new List<ColumnInfo>();
+            using (var conn = new SqlConnection(connStr))
+            {
+                conn.Open();
+                var cmd = new SqlCommand($@"
+                    SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_NAME = '{table}'", conn);
+
+                var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    cols.Add(new ColumnInfo
+                    {
+                        Name = reader.GetString(0),
+                        DataType = reader.GetString(1),
+                        IsNullable = reader.GetString(2) == "YES"
+                    });
+                }
+            }
+            return cols;
+        }
+
+        private static List<ForeignKeyInfo> GetForeignKeys(string connStr, string table)
+        {
+            var fks = new List<ForeignKeyInfo>();
+            using (var conn = new SqlConnection(connStr))
+            {
+                conn.Open();
+                var cmd = new SqlCommand($@"
+                    SELECT 
+                        f.name AS FK_Name,
+                        COL_NAME(fc.parent_object_id, fc.parent_column_id) AS FK_Column,
+                        OBJECT_NAME (fc.referenced_object_id) AS PK_Table,
+                        COL_NAME(fc.referenced_object_id, fc.referenced_column_id) AS PK_Column
+                    FROM sys.foreign_keys AS f
+                    INNER JOIN sys.foreign_key_columns AS fc 
+                        ON f.object_id = fc.constraint_object_id
+                    WHERE OBJECT_NAME(f.parent_object_id) = '{table}'", conn);
+                var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    fks.Add(new ForeignKeyInfo
+                    {
+                        Name = reader.GetString(0),
+                        Column = reader.GetString(1),
+                        ReferenceTable = reader.GetString(2),
+                        ReferenceColumn = reader.GetString(3)
+                    });
+                }
+            }
+            return fks;
+        }
+
+        private static string SqlTypeToCSharpType(string sqlType, bool isNullable)
+        {
+            string type = sqlType switch
+            {
+                "int" => "int",
+                "bigint" => "long",
+                "smallint" => "short",
+                "tinyint" => "byte",
+                "bit" => "bool",
+                "decimal" => "decimal",
+                "numeric" => "decimal",
+                "money" => "decimal",
+                "float" => "double",
+                "real" => "float",
+                "date" => "DateTime",
+                "datetime" => "DateTime",
+                "datetime2" => "DateTime",
+                "datetimeoffset" => "DateTimeOffset",
+                "time" => "TimeSpan",
+                "char" => "string",
+                "varchar" => "string",
+                "text" => "string",
+                "nchar" => "string",
+                "nvarchar" => "string",
+                "ntext" => "string",
+                "uniqueidentifier" => "Guid",
+                _ => "string"
+            };
+            return isNullable && type != "string" ? type + "?" : type;
+        }
+        #endregion
+
+        #region Generators
+        private static string GenerateEntity(string table, List<ColumnInfo> columns, List<ForeignKeyInfo> fks)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using System;");
+            sb.AppendLine("using System.Collections.Generic;");
+            sb.AppendLine();
+            sb.AppendLine($"namespace Entities");
+            sb.AppendLine("{");
+            sb.AppendLine($"\tpublic class {table}Entity");
+            sb.AppendLine("\t{");
+
+            foreach (var col in columns)
+            {
+                sb.AppendLine($"\t\tpublic {SqlTypeToCSharpType(col.DataType, col.IsNullable)} {col.Name} {{ get; set; }}");
+            }
+
+            foreach (var fk in fks)
+            {
+                sb.AppendLine($"\t\tpublic {fk.ReferenceTable}Entity {fk.ReferenceTable} {{ get; set; }}");
+            }
+
+            sb.AppendLine("\t}");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string GenerateRequest(string table, List<ColumnInfo> columns)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using System;");
+            sb.AppendLine();
+            sb.AppendLine($"namespace Requests");
+            sb.AppendLine("{");
+            sb.AppendLine($"\tpublic class {table}Request");
+            sb.AppendLine("\t{");
+            foreach (var col in columns)
+            {
+                if (col.Name.ToLower() != "id") // skip ID for request
+                    sb.AppendLine($"\t\tpublic {SqlTypeToCSharpType(col.DataType, col.IsNullable)} {col.Name} {{ get; set; }}");
+            }
+            sb.AppendLine("\t}");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string GenerateResponse(string table, List<ColumnInfo> columns, List<ForeignKeyInfo> fks)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using System;");
+            sb.AppendLine();
+            sb.AppendLine($"namespace Responses");
+            sb.AppendLine("{");
+            sb.AppendLine($"\tpublic class {table}Response");
+            sb.AppendLine("\t{");
+            foreach (var col in columns)
+            {
+                sb.AppendLine($"\t\tpublic {SqlTypeToCSharpType(col.DataType, col.IsNullable)} {col.Name} {{ get; set; }}");
+            }
+
+            foreach (var fk in fks)
+            {
+                sb.AppendLine($"\t\tpublic {fk.ReferenceTable}Response {fk.ReferenceTable} {{ get; set; }}");
+            }
+
+            sb.AppendLine("\t}");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string GenerateRepositoryInterface(string table)
+        {
+            return $@"using Entities;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace Repositories
+{{
+    public interface I{table}Repository
+    {{
+        Task<{table}Entity> GetByIdAsync(int id);
+        Task<List<{table}Entity>> GetAllAsync();
+        Task<int> AddAsync({table}Entity entity);
+        Task<bool> UpdateAsync({table}Entity entity);
+        Task<bool> DeleteAsync(int id);
+    }}
+}}";
+        }
+
+        private static string GenerateRepositoryImpl(string table, List<ColumnInfo> columns, List<ForeignKeyInfo> fks)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using Entities;");
+            sb.AppendLine("using System.Collections.Generic;");
+            sb.AppendLine("using System.Threading.Tasks;");
+            sb.AppendLine("using System.Data.SqlClient;");
+            sb.AppendLine();
+            sb.AppendLine("namespace Repositories");
+            sb.AppendLine("{");
+            sb.AppendLine($"\tpublic class {table}Repository : I{table}Repository");
+            sb.AppendLine("\t{");
+            sb.AppendLine("\t\tprivate readonly string _connectionString = \"YourConnectionStringHere\";");
+            sb.AppendLine();
+            sb.AppendLine("\t\tpublic async Task<int> AddAsync(" + table + "Entity entity) { /* TODO: implement INSERT */ return 0; }");
+            sb.AppendLine("\t\tpublic async Task<bool> UpdateAsync(" + table + "Entity entity) { /* TODO: implement UPDATE */ return true; }");
+            sb.AppendLine("\t\tpublic async Task<bool> DeleteAsync(int id) { /* TODO: implement DELETE */ return true; }");
+            sb.AppendLine("\t\tpublic async Task<" + table + "Entity> GetByIdAsync(int id) { /* TODO: implement SELECT by Id */ return null; }");
+            sb.AppendLine("\t\tpublic async Task<List<" + table + "Entity>> GetAllAsync() { /* TODO: implement SELECT all */ return new List<" + table + "Entity>(); }");
+            sb.AppendLine("\t}");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string GenerateServiceInterface(string table)
+        {
+            return $@"using Requests;
+using Responses;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace Services
+{{
+    public interface I{table}Service
+    {{
+        Task<{table}Response> GetByIdAsync(int id);
+        Task<List<{table}Response>> GetAllAsync();
+        Task<int> AddAsync({table}Request request);
+        Task<bool> UpdateAsync(int id, {table}Request request);
+        Task<bool> DeleteAsync(int id);
+    }}
+}}";
+        }
+
+        private static string GenerateServiceImpl(string table)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using Entities;");
+            sb.AppendLine("using Repositories;");
+            sb.AppendLine("using Requests;");
+            sb.AppendLine("using Responses;");
+            sb.AppendLine("using System.Collections.Generic;");
+            sb.AppendLine("using System.Linq;");
+            sb.AppendLine("using System.Threading.Tasks;");
+            sb.AppendLine();
+            sb.AppendLine("namespace Services");
+            sb.AppendLine("{");
+            sb.AppendLine($"\tpublic class {table}Service : I{table}Service");
+            sb.AppendLine("\t{");
+            sb.AppendLine($"\t\tprivate readonly I{table}Repository _repository;");
+            sb.AppendLine($"\t\tpublic {table}Service(I{table}Repository repository) {{ _repository = repository; }}");
+            sb.AppendLine($"\t\tpublic async Task<int> AddAsync({table}Request request) {{ /* TODO: map request to entity */ return 0; }}");
+            sb.AppendLine($"\t\tpublic async Task<bool> UpdateAsync(int id, {table}Request request) {{ /* TODO: implement update */ return true; }}");
+            sb.AppendLine($"\t\tpublic async Task<bool> DeleteAsync(int id) => await _repository.DeleteAsync(id);");
+            sb.AppendLine($"\t\tpublic async Task<{table}Response> GetByIdAsync(int id) {{ /* TODO: map entity to response */ return null; }}");
+            sb.AppendLine($"\t\tpublic async Task<List<{table}Response>> GetAllAsync() {{ /* TODO: map entity list to response list */ return new List<{table}Response>(); }}");
+            sb.AppendLine("\t}");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string GenerateController(string table)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using Microsoft.AspNetCore.Mvc;");
+            sb.AppendLine("using Requests;");
+            sb.AppendLine("using Responses;");
+            sb.AppendLine("using Services;");
+            sb.AppendLine("using System.Collections.Generic;");
+            sb.AppendLine("using System.Threading.Tasks;");
+            sb.AppendLine();
+            sb.AppendLine("namespace Controllers");
+            sb.AppendLine("{");
+            sb.AppendLine($"\t[ApiController]");
+            sb.AppendLine($"\t[Route(\"api/[controller]\")]");
+            sb.AppendLine($"\tpublic class {table}Controller : ControllerBase");
+            sb.AppendLine("\t{");
+            sb.AppendLine($"\t\tprivate readonly I{table}Service _service;");
+            sb.AppendLine($"\t\tpublic {table}Controller(I{table}Service service) {{ _service = service; }}");
+            sb.AppendLine();
+            sb.AppendLine("\t\t[HttpGet]");
+            sb.AppendLine($"\t\tpublic async Task<List<{table}Response>> GetAll() => await _service.GetAllAsync();");
+            sb.AppendLine();
+            sb.AppendLine("\t\t[HttpGet(\"{id}\")]");
+            sb.AppendLine($"\t\tpublic async Task<{table}Response> GetById(int id) => await _service.GetByIdAsync(id);");
+            sb.AppendLine();
+            sb.AppendLine("\t\t[HttpPost]");
+            sb.AppendLine($"\t\tpublic async Task<int> Create({table}Request request) => await _service.AddAsync(request);");
+            sb.AppendLine();
+            sb.AppendLine("\t\t[HttpPut(\"{id}\")]");
+            sb.AppendLine($"\t\tpublic async Task<bool> Update(int id, {table}Request request) => await _service.UpdateAsync(id, request);");
+            sb.AppendLine();
+            sb.AppendLine("\t\t[HttpDelete(\"{id}\")]");
+            sb.AppendLine("\t\tpublic async Task<bool> Delete(int id) => await _service.DeleteAsync(id);");
+            sb.AppendLine("\t}");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        #endregion
+
+        class ColumnInfo
+        {
+            public string Name { get; set; }
+            public string DataType { get; set; }
+            public bool IsNullable { get; set; }
+        }
+
+        class ForeignKeyInfo
+        {
+            public string Name { get; set; }
+            public string Column { get; set; }
+            public string ReferenceTable { get; set; }
+            public string ReferenceColumn { get; set; }
         }
     }
-
 }
 
 //using System;
