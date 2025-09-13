@@ -74,7 +74,7 @@ namespace GeneralSQLToSharp
 </Project>");
 
             // Create folders
-            string[] folders = { "Entities", "Requests", "Responses", "Repositories", "Services", "Controllers" };
+            string[] folders = { "Entities", "Requests", "Responses", "IRepositories", "Repositories", "IServices", "Services", "Controllers" };
             foreach (var f in folders) Directory.CreateDirectory(Path.Combine(outputPath, f));
 
             var tables = GetTables(connectionString);
@@ -87,9 +87,9 @@ namespace GeneralSQLToSharp
                 WriteToFile(Path.Combine(outputPath, "Entities", table + ".cs"), GenerateEntity(table, columns, fks));
                 WriteToFile(Path.Combine(outputPath, "Requests", table + "Request.cs"), GenerateRequest(table, columns));
                 WriteToFile(Path.Combine(outputPath, "Responses", table + "Response.cs"), GenerateResponse(table, columns));
-                WriteToFile(Path.Combine(outputPath, "Repositories", "I" + table + "Repository.cs"), GenerateRepositoryInterface(table));
+                WriteToFile(Path.Combine(outputPath, "IRepositories", "I" + table + "Repository.cs"), GenerateRepositoryInterface(table));
                 WriteToFile(Path.Combine(outputPath, "Repositories", table + "Repository.cs"), GenerateRepositoryImpl(table));
-                WriteToFile(Path.Combine(outputPath, "Services", "I" + table + "Service.cs"), GenerateServiceInterface(table));
+                WriteToFile(Path.Combine(outputPath, "IServices", "I" + table + "Service.cs"), GenerateServiceInterface(table));
                 WriteToFile(Path.Combine(outputPath, "Services", table + "Service.cs"), GenerateServiceImpl(table, columns));
                 WriteToFile(Path.Combine(outputPath, "Controllers", table + "Controller.cs"), GenerateController(table));
             }
@@ -242,7 +242,7 @@ namespace Entities
         private static string GenerateResponse(string table, List<ColumnInfo> columns)
         {
             var props = string.Join(Environment.NewLine, columns.Select(c =>
-                  $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}"));
+                  $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}")); 
             return $@"namespace Responses
 {{
     public class {table}Response
