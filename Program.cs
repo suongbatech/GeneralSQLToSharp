@@ -4,6 +4,8 @@ using System.IO;
 using System.Text;
 using System.Collections.Generic;
 using System.Linq;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace SqlToCSharpGenerator
 {
@@ -28,15 +30,17 @@ namespace SqlToCSharpGenerator
             {
                 var columns = GetColumns(connection, table);
 
-                WriteToFile(Path.Combine(outputPath, "Entities", table + ".cs"), GenerateEntity(table, columns));
-                WriteToFile(Path.Combine(outputPath, "Requests", table + "Request.cs"), GenerateRequest(table, columns));
-                WriteToFile(Path.Combine(outputPath, "Responses", table + "Response.cs"), GenerateResponse(table, columns));
-                WriteToFile(Path.Combine(outputPath, "IRepositories", "I" + table + "Repository.cs"), GenerateRepositoryInterface(table));
-                WriteToFile(Path.Combine(outputPath, "Repositories", table + "Repository.cs"), GenerateRepositoryImpl(table));
-                WriteToFile(Path.Combine(outputPath, "IServices", "I" + table + "Service.cs"), GenerateServiceInterface(table));
-                WriteToFile(Path.Combine(outputPath, "Services", table + "Service.cs"), GenerateServiceImpl(table));
-                WriteToFile(Path.Combine(outputPath, "Controllers", table + "Controller.cs"), GenerateController(table));
-                WriteToFile(Path.Combine(outputPath, "MappingProfiles", table + "Profile.cs"), GenerateMappingProfile(table));
+                var className = ToPascalCase(table);
+
+                WriteToFile(Path.Combine(outputPath, "Entities", className + ".cs"), GenerateEntity(className, columns));
+                WriteToFile(Path.Combine(outputPath, "Requests", className + "Request.cs"), GenerateRequest(className, columns));
+                WriteToFile(Path.Combine(outputPath, "Responses", className + "Response.cs"), GenerateResponse(className, columns));
+                WriteToFile(Path.Combine(outputPath, "IRepositories", "I" + className + "Repository.cs"), GenerateRepositoryInterface(className));
+                WriteToFile(Path.Combine(outputPath, "Repositories", className + "Repository.cs"), GenerateRepositoryImpl(className));
+                WriteToFile(Path.Combine(outputPath, "IServices", "I" + className + "Service.cs"), GenerateServiceInterface(className));
+                WriteToFile(Path.Combine(outputPath, "Services", className + "Service.cs"), GenerateServiceImpl(className));
+                WriteToFile(Path.Combine(outputPath, "Controllers", className + "Controller.cs"), GenerateController(className));
+                WriteToFile(Path.Combine(outputPath, "MappingProfiles", className + "Profile.cs"), GenerateMappingProfile(className));
             }
 
             WriteToFile(Path.Combine(outputPath, "Data", "BaseContext.cs"), GenerateBaseContext(tables));
@@ -56,6 +60,12 @@ namespace SqlToCSharpGenerator
         }
 
         // =================== Helpers ===================
+        static string ToPascalCase(string text)
+        {
+            // Replace underscores with spaces, then capitalize each word, remove spaces
+            return Regex.Replace(text, @"(_|^)(\w)", m => m.Groups[2].Value.ToUpper());
+        }
+
         static List<string> GetTables(SqlConnection connection)
         {
             var tables = new List<string>();
@@ -72,7 +82,10 @@ namespace SqlToCSharpGenerator
             cmd.Parameters.AddWithValue("@Table", table);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
-                columns.Add((reader.GetString(0), SqlTypeToCSharp(reader.GetString(1))));
+            {
+                var colName = ToPascalCase(reader.GetString(0));
+                columns.Add((colName, SqlTypeToCSharp(reader.GetString(1))));
+            }
             return columns;
         }
 
@@ -311,7 +324,10 @@ namespace MappingProfiles {{
             sb.AppendLine("    public class BaseContext : DbContext {");
             sb.AppendLine("        public BaseContext(DbContextOptions<BaseContext> options) : base(options) { }");
             foreach (var t in tables)
-                sb.AppendLine($"        public DbSet<{t}> {t}Set {{ get; set; }}");
+            {
+                var className = ToPascalCase(t);
+                sb.AppendLine($"        public DbSet<{className}> {className}Set {{ get; set; }}");
+            }
             sb.AppendLine("    } }");
             return sb.ToString();
         }
@@ -344,8 +360,9 @@ namespace Data { public class UnitOfWork : IUnitOfWork { private readonly BaseCo
             sb.AppendLine("builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();");
             foreach (var t in tables)
             {
-                sb.AppendLine($"builder.Services.AddScoped<I{t}Repository, {t}Repository>();");
-                sb.AppendLine($"builder.Services.AddScoped<I{t}Service, {t}Service>();");
+                var className = ToPascalCase(t);
+                sb.AppendLine($"builder.Services.AddScoped<I{className}Repository, {className}Repository>();");
+                sb.AppendLine($"builder.Services.AddScoped<I{className}Service, {className}Service>();");
             }
             sb.AppendLine("builder.Services.AddAutoMapper(typeof(Program));");
             sb.AppendLine("var app = builder.Build();");
