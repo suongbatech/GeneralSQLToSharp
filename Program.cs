@@ -1,34 +1,38 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Data.SqlClient;
 using System.IO;
-using System.Linq;
 using System.Text;
+using System.Data.SqlClient;
+using System.Collections.Generic;
+using System.Linq;
 
-namespace SqlToCSharpGenerator
+namespace SqlToCSharpFullGenerator
 {
     class Program
     {
         static string ConnectionString = "Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;";
-        static string OutputPath = @"D:\Temp\GeneratedCode";
+        static string OutputPath = @"D:\Temp\Generated";
 
-        static void Main(string[] args)
+        static void Main()
         {
-            // Create folder structure
-            var folders = new[] {
-                "Entities","Requests","Responses","IRepositories","Repositories",
-                "IServices","Services","Controllers","MappingProfiles","Data"
+            var folders = new[]
+            {
+                "Entities","Requests","Responses",
+                "IRepositories","Repositories",
+                "IServices","Services",
+                "Controllers","MappingProfiles",
+                "Data","SQL", "Helper"
             };
             foreach (var f in folders)
                 Directory.CreateDirectory(Path.Combine(OutputPath, f));
 
-            using var connection = new SqlConnection(ConnectionString);
-            connection.Open();
+            using var conn = new SqlConnection(ConnectionString);
+            conn.Open();
 
-            var tables = GetTables(connection);
+            var tables = GetTables(conn);
             foreach (var table in tables)
             {
-                var columns = GetColumns(connection, table);
+                var columns = GetColumns(conn, table);
+                var pk = columns.First().Name; // tạm lấy cột đầu làm khóa
 
                 WriteFile("Entities", table + ".cs", GenerateEntity(table, columns));
                 WriteFile("Requests", table + "Request.cs", GenerateRequest(table, columns));
@@ -39,47 +43,43 @@ namespace SqlToCSharpGenerator
                 WriteFile("Services", table + "Service.cs", GenerateServiceImpl(table));
                 WriteFile("Controllers", table + "Controller.cs", GenerateController(table));
                 WriteFile("MappingProfiles", table + "Profile.cs", GenerateMappingProfile(table));
+                WriteFile("SQL", table + "_CRUD.sql", GenerateSqlCrud(table, columns, pk));
             }
 
-            // BaseContext & UnitOfWork
             WriteFile("Data", "BaseContext.cs", GenerateBaseContext(tables));
             WriteFile("Data", "IUnitOfWork.cs", GenerateIUnitOfWork());
             WriteFile("Data", "UnitOfWork.cs", GenerateUnitOfWork());
+            WriteFile("Helper", "ServiceRegistration.cs", GenerateServiceRegistration());
 
-            // Program.cs
-            WriteFile("", "Program.cs", GenerateProgramCs(tables));
-
-            // csproj & appsettings.json
-            WriteFile("", "GeneratedApi.csproj", GenerateCsProj());
+            WriteFile("", "Program.cs", GenerateProgramCs());
             WriteFile("", "appsettings.json", GenerateAppSettings());
+            WriteFile("", "GeneratedProject.csproj", GenerateCsProj());
 
-            Console.WriteLine("✅ Done generating all files!");
+            Console.WriteLine("✅ All files generated successfully!");
+            Console.WriteLine("👉 Tiếp theo, chạy: dotnet ef migrations add Init && dotnet ef database update");
         }
 
         #region Helpers
         static List<string> GetTables(SqlConnection conn)
         {
-            var tables = new List<string>();
+            var list = new List<string>();
             using var cmd = new SqlCommand("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE'", conn);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) tables.Add(reader.GetString(0));
-            return tables;
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) list.Add(r.GetString(0));
+            return list;
         }
 
         static List<(string Name, string Type)> GetColumns(SqlConnection conn, string table)
         {
-            var columns = new List<(string, string)>();
+            var list = new List<(string, string)>();
             using var cmd = new SqlCommand("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME=@Table", conn);
             cmd.Parameters.AddWithValue("@Table", table);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                columns.Add((reader.GetString(0), SqlTypeToCSharp(reader.GetString(1))));
-            }
-            return columns;
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) list.Add((r.GetString(0), SqlTypeToCSharp(r.GetString(1))));
+            return list;
         }
 
-        static string SqlTypeToCSharp(string sqlType) => sqlType switch
+        static string SqlTypeToCSharp(string type) => type switch
         {
             "int" => "int",
             "bigint" => "long",
@@ -94,51 +94,56 @@ namespace SqlToCSharpGenerator
         static void WriteFile(string folder, string fileName, string content)
         {
             var path = string.IsNullOrEmpty(folder) ? Path.Combine(OutputPath, fileName) : Path.Combine(OutputPath, folder, fileName);
-            File.WriteAllText(path, content);
-            Console.WriteLine($"Generated: {path}");
+            File.WriteAllText(path, content, Encoding.UTF8);
+            Console.WriteLine($"Generated: {fileName}");
         }
         #endregion
 
         #region Generators
-        static string GenerateEntity(string table, List<(string Name, string Type)> columns)
+        static string GenerateEntity(string table, List<(string Name, string Type)> cols)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("namespace Entities {");
-            sb.AppendLine($"    public class {table} {{");
-            foreach (var c in columns)
-                sb.AppendLine($"        public {c.Type} {PascalCase(c.Name)} {{ get; set; }}");
+            sb.AppendLine("using System;");
+            sb.AppendLine("namespace Entities");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public class {table}");
+            sb.AppendLine("    {");
+            foreach (var c in cols)
+                sb.AppendLine($"        public {c.Type} {c.Name} {{ get; set; }}");
             sb.AppendLine("    }");
             sb.AppendLine("}");
             return sb.ToString();
         }
 
-        static string GenerateRequest(string table, List<(string Name, string Type)> columns)
+        static string GenerateRequest(string table, List<(string Name, string Type)> cols)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("namespace Requests {");
-            sb.AppendLine($"    public class {table}Request {{");
-            foreach (var c in columns)
-                sb.AppendLine($"        public {c.Type} {PascalCase(c.Name)} {{ get; set; }}");
+            sb.AppendLine("namespace Requests");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public class {table}Request");
+            sb.AppendLine("    {");
+            foreach (var c in cols)
+                sb.AppendLine($"        public {c.Type} {c.Name} {{ get; set; }}");
             sb.AppendLine("    }");
             sb.AppendLine("}");
             return sb.ToString();
         }
 
-        static string GenerateResponse(string table, List<(string Name, string Type)> columns)
+        static string GenerateResponse(string table, List<(string Name, string Type)> cols)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("namespace Responses {");
-            sb.AppendLine($"    public class {table}Response {{");
-            foreach (var c in columns)
-                sb.AppendLine($"        public {c.Type} {PascalCase(c.Name)} {{ get; set; }}");
+            sb.AppendLine("namespace Responses");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public class {table}Response");
+            sb.AppendLine("    {");
+            foreach (var c in cols)
+                sb.AppendLine($"        public {c.Type} {c.Name} {{ get; set; }}");
             sb.AppendLine("    }");
             sb.AppendLine("}");
             return sb.ToString();
         }
 
-        static string GenerateRepositoryInterface(string table)
-        {
-            return $@"
+        static string GenerateRepositoryInterface(string table) => $@"
 using Entities;
 using System;
 using System.Collections.Generic;
@@ -155,11 +160,8 @@ namespace IRepositories
         Task DeleteAsync(Guid id);
     }}
 }}";
-        }
 
-        static string GenerateRepositoryImpl(string table)
-        {
-            return $@"
+        static string GenerateRepositoryImpl(string table) => $@"
 using Entities;
 using IRepositories;
 using Data;
@@ -178,25 +180,39 @@ namespace Repositories
         public {table}Repository(BaseContext context)
         {{
             _context = context;
-            _db = _context.Set<{table}>();
+            _db = context.Set<{table}>();
         }}
 
         public async Task<{table}> GetByIdAsync(Guid id) => await _db.FindAsync(id);
+
         public async Task<IEnumerable<{table}>> GetAllAsync() => await _db.ToListAsync();
-        public async Task<{table}> AddAsync({table} entity) {{ _db.Add(entity); await _context.SaveChangesAsync(); return entity; }}
-        public async Task UpdateAsync({table} entity) {{ _db.Update(entity); await _context.SaveChangesAsync(); }}
+
+        public async Task<{table}> AddAsync({table} entity)
+        {{
+            _db.Add(entity);
+            await _context.SaveChangesAsync();
+            return entity;
+        }}
+
+        public async Task UpdateAsync({table} entity)
+        {{
+            _db.Update(entity);
+            await _context.SaveChangesAsync();
+        }}
+
         public async Task DeleteAsync(Guid id)
         {{
-            var entity = await GetByIdAsync(id);
-            if(entity != null) {{ _db.Remove(entity); await _context.SaveChangesAsync(); }}
+            var entity = await _db.FindAsync(id);
+            if (entity != null)
+            {{
+                _db.Remove(entity);
+                await _context.SaveChangesAsync();
+            }}
         }}
     }}
 }}";
-        }
 
-        static string GenerateServiceInterface(string table)
-        {
-            return $@"
+        static string GenerateServiceInterface(string table) => $@"
 using Requests;
 using Responses;
 using System;
@@ -209,16 +225,13 @@ namespace IServices
     {{
         Task<{table}Response> GetByIdAsync(Guid id);
         Task<IEnumerable<{table}Response>> GetAllAsync();
-        Task<{table}Response> CreateAsync({table}Request request);
-        Task UpdateAsync(Guid id, {table}Request request);
+        Task<{table}Response> CreateAsync({table}Request req);
+        Task UpdateAsync(Guid id, {table}Request req);
         Task DeleteAsync(Guid id);
     }}
 }}";
-        }
 
-        static string GenerateServiceImpl(string table)
-        {
-            return $@"
+        static string GenerateServiceImpl(string table) => $@"
 using Entities;
 using IServices;
 using IRepositories;
@@ -227,8 +240,8 @@ using Responses;
 using Data;
 using AutoMapper;
 using System;
-using System.Linq;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace Services
@@ -241,34 +254,30 @@ namespace Services
 
         public {table}Service(I{table}Repository repo, IUnitOfWork uow, IMapper mapper)
         {{
-            _repo = repo; _uow = uow; _mapper = mapper;
+            _repo = repo;
+            _uow = uow;
+            _mapper = mapper;
         }}
 
-        public async Task<{table}Response> GetByIdAsync(Guid id)
-        {{
-            var entity = await _repo.GetByIdAsync(id);
-            return entity == null ? null : _mapper.Map<{table}Response>(entity);
-        }}
+        public async Task<{table}Response> GetByIdAsync(Guid id) =>
+            _mapper.Map<{table}Response>(await _repo.GetByIdAsync(id));
 
-        public async Task<IEnumerable<{table}Response>> GetAllAsync()
-        {{
-            var list = await _repo.GetAllAsync();
-            return list.Select(x => _mapper.Map<{table}Response>(x));
-        }}
+        public async Task<IEnumerable<{table}Response>> GetAllAsync() =>
+            (await _repo.GetAllAsync()).Select(_mapper.Map<{table}Response>);
 
-        public async Task<{table}Response> CreateAsync({table}Request request)
+        public async Task<{table}Response> CreateAsync({table}Request req)
         {{
-            var entity = _mapper.Map<{table}>(request);
+            var entity = _mapper.Map<{table}>(req);
             await _repo.AddAsync(entity);
             await _uow.SaveChangesAsync();
             return _mapper.Map<{table}Response>(entity);
         }}
 
-        public async Task UpdateAsync(Guid id, {table}Request request)
+        public async Task UpdateAsync(Guid id, {table}Request req)
         {{
             var entity = await _repo.GetByIdAsync(id);
-            if(entity == null) throw new Exception(""Not found"");
-            _mapper.Map(request, entity);
+            if (entity == null) throw new Exception(""NotFound"");
+            _mapper.Map(req, entity);
             await _repo.UpdateAsync(entity);
             await _uow.SaveChangesAsync();
         }}
@@ -280,15 +289,11 @@ namespace Services
         }}
     }}
 }}";
-        }
 
-        static string GenerateController(string table)
-        {
-            return $@"
+        static string GenerateController(string table) => $@"
 using Microsoft.AspNetCore.Mvc;
 using IServices;
 using Requests;
-using Responses;
 using System;
 using System.Threading.Tasks;
 
@@ -299,8 +304,7 @@ namespace Controllers
     public class {table}Controller : ControllerBase
     {{
         private readonly I{table}Service _service;
-
-        public {table}Controller(I{table}Service service) {{ _service = service; }}
+        public {table}Controller(I{table}Service service) => _service = service;
 
         [HttpGet(""{{id}}"")]
         public async Task<IActionResult> Get(Guid id) => Ok(await _service.GetByIdAsync(id));
@@ -309,20 +313,25 @@ namespace Controllers
         public async Task<IActionResult> GetAll() => Ok(await _service.GetAllAsync());
 
         [HttpPost]
-        public async Task<IActionResult> Create([FromBody] {table}Request req) => Ok(await _service.CreateAsync(req));
+        public async Task<IActionResult> Create({table}Request req) => Ok(await _service.CreateAsync(req));
 
         [HttpPut(""{{id}}"")]
-        public async Task<IActionResult> Update(Guid id, [FromBody] {table}Request req) {{ await _service.UpdateAsync(id, req); return Ok(); }}
+        public async Task<IActionResult> Update(Guid id, {table}Request req)
+        {{
+            await _service.UpdateAsync(id, req);
+            return Ok();
+        }}
 
         [HttpDelete(""{{id}}"")]
-        public async Task<IActionResult> Delete(Guid id) {{ await _service.DeleteAsync(id); return Ok(); }}
+        public async Task<IActionResult> Delete(Guid id)
+        {{
+            await _service.DeleteAsync(id);
+            return Ok();
+        }}
     }}
 }}";
-        }
 
-        static string GenerateMappingProfile(string table)
-        {
-            return $@"
+        static string GenerateMappingProfile(string table) => $@"
 using AutoMapper;
 using Entities;
 using Requests;
@@ -339,6 +348,17 @@ namespace MappingProfiles
         }}
     }}
 }}";
+
+        static string GenerateSqlCrud(string table, List<(string Name, string Type)> cols, string pk)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"-- CRUD for {table}");
+            sb.AppendLine($"SELECT * FROM {table};");
+            sb.AppendLine($"SELECT * FROM {table} WHERE {pk}=@Id;");
+            sb.AppendLine($"INSERT INTO {table} ({string.Join(",", cols.Select(c => c.Name))}) VALUES ({string.Join(",", cols.Select(c => "@" + c.Name))});");
+            sb.AppendLine($"UPDATE {table} SET {string.Join(",", cols.Select(c => c.Name + "=@" + c.Name))} WHERE {pk}=@Id;");
+            sb.AppendLine($"DELETE FROM {table} WHERE {pk}=@Id;");
+            return sb.ToString();
         }
 
         static string GenerateBaseContext(List<string> tables)
@@ -346,58 +366,87 @@ namespace MappingProfiles
             var sb = new StringBuilder();
             sb.AppendLine("using Microsoft.EntityFrameworkCore;");
             sb.AppendLine("using Entities;");
-            sb.AppendLine("namespace Data {");
-            sb.AppendLine("    public class BaseContext : DbContext {");
-            sb.AppendLine("        public BaseContext(DbContextOptions<BaseContext> options) : base(options) { }");
+            sb.AppendLine("namespace Data");
+            sb.AppendLine("{");
+            sb.AppendLine("    public class BaseContext : DbContext");
+            sb.AppendLine("    {");
+            sb.AppendLine("        public BaseContext(DbContextOptions<BaseContext> options) : base(options) {}");
             foreach (var t in tables)
                 sb.AppendLine($"        public DbSet<{t}> {t}Set {{ get; set; }}");
-            sb.AppendLine("    } }");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
             return sb.ToString();
         }
 
-        static string GenerateIUnitOfWork() =>
-@"using System.Threading.Tasks;
+        static string GenerateIUnitOfWork() => @"
+using System.Threading.Tasks;
 namespace Data { public interface IUnitOfWork { Task<int> SaveChangesAsync(); } }";
 
-        static string GenerateUnitOfWork() =>
-@"using System.Threading.Tasks;
-namespace Data { public class UnitOfWork : IUnitOfWork { private readonly BaseContext _context; public UnitOfWork(BaseContext context) => _context = context; public Task<int> SaveChangesAsync() => _context.SaveChangesAsync(); } }";
+        static string GenerateUnitOfWork() => @"
+using System.Threading.Tasks;
+namespace Data
+{
+    public class UnitOfWork : IUnitOfWork
+    {
+        private readonly BaseContext _context;
+        public UnitOfWork(BaseContext context) => _context = context;
+        public Task<int> SaveChangesAsync() => _context.SaveChangesAsync();
+    }
+}";
 
-        static string GenerateProgramCs(List<string> tables)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("using Microsoft.EntityFrameworkCore;");
-            sb.AppendLine("using Microsoft.OpenApi.Models;");
-            sb.AppendLine("using Data;");
-            sb.AppendLine("using IRepositories;");
-            sb.AppendLine("using Repositories;");
-            sb.AppendLine("using IServices;");
-            sb.AppendLine("using Services;");
-            sb.AppendLine("using AutoMapper;");
-            sb.AppendLine("var builder = WebApplication.CreateBuilder(args);");
-            sb.AppendLine("builder.Services.AddControllers();");
-            sb.AppendLine("builder.Services.AddEndpointsApiExplorer();");
-            sb.AppendLine("builder.Services.AddSwaggerGen(c => { c.SwaggerDoc(\"v1\", new OpenApiInfo { Title = \"Generated API\", Version = \"v1\" }); });");
-            sb.AppendLine("builder.Services.AddDbContext<BaseContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString(\"DefaultConnection\")));");
-            sb.AppendLine("builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();");
-            foreach (var t in tables)
-            {
-                sb.AppendLine($"builder.Services.AddScoped<I{t}Repository, {t}Repository>();");
-                sb.AppendLine($"builder.Services.AddScoped<I{t}Service, {t}Service>();");
-            }
-            sb.AppendLine("builder.Services.AddAutoMapper(typeof(Program));");
-            sb.AppendLine("var app = builder.Build();");
-            sb.AppendLine("if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); }");
-            sb.AppendLine("app.UseHttpsRedirection();");
-            sb.AppendLine("app.UseAuthorization();");
-            sb.AppendLine("app.MapControllers();");
-            sb.AppendLine("app.Run();");
-            return sb.ToString();
-        }
+        static string GenerateProgramCs() => @"
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.EntityFrameworkCore;
+using Data;
+using AutoMapper;
+using Helper;
 
-        static string GenerateCsProj()
-        {
-            return @"<Project Sdk=""Microsoft.NET.Sdk.Web"">
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<BaseContext>(opt =>
+    opt.UseSqlServer(builder.Configuration.GetConnectionString(""DefaultConnection"")));
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+builder.Services.AddRepositoriesAndServices();
+builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+// Auto migrate DB
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<BaseContext>();
+    db.Database.Migrate();
+}
+
+app.UseSwagger();
+app.UseSwaggerUI();
+app.MapControllers();
+app.Run();
+";
+
+        static string GenerateAppSettings() => @"
+{
+  ""ConnectionStrings"": {
+    ""DefaultConnection"": ""Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;""
+  },
+  ""Logging"": {
+    ""LogLevel"": {
+      ""Default"": ""Information"",
+      ""Microsoft.AspNetCore"": ""Warning""
+    }
+  },
+  ""AllowedHosts"": ""*""
+}
+";
+
+        static string GenerateCsProj() => @"
+<Project Sdk=""Microsoft.NET.Sdk.Web"">
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -409,32 +458,45 @@ namespace Data { public class UnitOfWork : IUnitOfWork { private readonly BaseCo
     <PackageReference Include=""Microsoft.EntityFrameworkCore.Tools"" Version=""6.0.0"" />
     <PackageReference Include=""AutoMapper"" Version=""12.0.0"" />
     <PackageReference Include=""AutoMapper.Extensions.Microsoft.DependencyInjection"" Version=""12.0.0"" />
-    <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.5.0"" />
+    <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.4.0"" />
   </ItemGroup>
 </Project>";
-        }
 
-        static string GenerateAppSettings()
+        static string GenerateServiceRegistration() => @"
+using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
+
+namespace Helper
+{
+    public static class ServiceRegistration
+    {
+        public static void AddRepositoriesAndServices(this IServiceCollection services)
         {
-            return @"{
-  ""ConnectionStrings"": {
-    ""DefaultConnection"": ""Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;""
-  },
-  ""Logging"": {
-    ""LogLevel"": {
-      ""Default"": ""Information"",
-      ""Microsoft.AspNetCore"": ""Warning""
+            var asm = Assembly.GetExecutingAssembly();
+
+            // Repositories
+            var repoInterfaces = asm.GetTypes()
+                .Where(t => t.IsInterface && t.Name.EndsWith(""Repository""));
+            foreach (var iface in repoInterfaces)
+            {
+                var impl = asm.GetTypes().FirstOrDefault(c => c.IsClass && iface.IsAssignableFrom(c));
+                if (impl != null)
+                    services.AddScoped(iface, impl);
+            }
+
+            // Services
+            var svcInterfaces = asm.GetTypes()
+                .Where(t => t.IsInterface && t.Name.EndsWith(""Service""));
+            foreach (var iface in svcInterfaces)
+            {
+                var impl = asm.GetTypes().FirstOrDefault(c => c.IsClass && iface.IsAssignableFrom(c));
+                if (impl != null)
+                    services.AddScoped(iface, impl);
+            }
+        }
     }
-  },
-  ""AllowedHosts"": ""*""
 }";
-        }
 
-        static string PascalCase(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return name;
-            return char.ToUpper(name[0]) + name.Substring(1);
-        }
         #endregion
     }
 }
