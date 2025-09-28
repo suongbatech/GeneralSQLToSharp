@@ -556,14 +556,12 @@ namespace Data
                 <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.4.0"" />
                 <PackageReference Include=""Microsoft.AspNetCore.Authentication.JwtBearer"" Version=""6.0.0"" />
 
-                 <!-- Thêm Unit Test -->
-                  <PackageReference Include=""xunit"" Version=""2.4.2"" />
-                  <PackageReference Include=""xunit.runner.visualstudio"" Version=""2.4.5"">
-                    <PrivateAssets>all</PrivateAssets>
-                    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-                  </PackageReference>
-                  <PackageReference Include=""Microsoft.NET.Test.Sdk"" Version=""17.7.2"" />
-                  <PackageReference Include=""Moq"" Version=""5.3.0"" />
+                 <!-- Unit Test -->
+                <PackageReference Include=""xunit"" Version=""2.4.2"" />
+                <PackageReference Include=""xunit.runner.visualstudio"" Version=""2.4.5"" />
+                <PackageReference Include=""Moq"" Version=""4.20.72"" />
+                <PackageReference Include=""Microsoft.NET.Test.Sdk"" Version=""17.7.2"" />
+
               </ItemGroup>
             </Project>";
         static string GenerateAuthController() => @"
