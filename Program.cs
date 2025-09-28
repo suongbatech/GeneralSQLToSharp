@@ -20,7 +20,7 @@ namespace SqlToCSharpFullGenerator
                 "IRepositories","Repositories",
                 "IServices","Services",
                 "Controllers","MappingProfiles",
-                "Data","SQL", "Helper"
+                "Data","SQL", "Helper", "UnitTest"
             };
             foreach (var f in folders)
                 Directory.CreateDirectory(Path.Combine(OutputPath, f));
@@ -54,7 +54,14 @@ namespace SqlToCSharpFullGenerator
             // sau khi WriteFile AuthController.cs ...
             WriteFile("Helper", "IRefreshTokenStore.cs", GenerateIRefreshTokenStore());
             WriteFile("Helper", "InMemoryRefreshTokenStore.cs", GenerateInMemoryRefreshTokenStore());
-           
+
+            // Tạo UnitTest mẫu cho bảng User
+            var tablesUnitTest = new List<string> { "User", "UserRoles" };
+            foreach (var tableUnitTest in tablesUnitTest)
+            {
+                WriteFile("UnitTest", tableUnitTest + "ServiceTests.cs", GenerateUnitTest(tableUnitTest));
+            }
+
             WriteFile("", "Program.cs", GenerateProgramCs());
             WriteFile("", "appsettings.json", GenerateAppSettings());
             WriteFile("", "GeneratedProject.csproj", GenerateCsProj());
@@ -548,6 +555,15 @@ namespace Data
                 <PackageReference Include=""AutoMapper.Extensions.Microsoft.DependencyInjection"" Version=""12.0.0"" />
                 <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.4.0"" />
                 <PackageReference Include=""Microsoft.AspNetCore.Authentication.JwtBearer"" Version=""6.0.0"" />
+
+                 <!-- Thêm Unit Test -->
+                  <PackageReference Include=""xunit"" Version=""2.4.2"" />
+                  <PackageReference Include=""xunit.runner.visualstudio"" Version=""2.4.5"">
+                    <PrivateAssets>all</PrivateAssets>
+                    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+                  </PackageReference>
+                  <PackageReference Include=""Microsoft.NET.Test.Sdk"" Version=""17.7.2"" />
+                  <PackageReference Include=""Moq"" Version=""5.3.0"" />
               </ItemGroup>
             </Project>";
         static string GenerateAuthController() => @"
@@ -696,5 +712,71 @@ namespace Data
             }";
 
         #endregion
+
+        #region UnitTest Generator
+        static string GenerateUnitTest(string table)
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("using System;");
+            sb.AppendLine("using System.Threading.Tasks;");
+            sb.AppendLine("using Moq;");
+            sb.AppendLine("using Xunit;");
+            sb.AppendLine("using IServices;");
+            sb.AppendLine("using Requests;");
+            sb.AppendLine("using Responses;");
+            sb.AppendLine();
+            sb.AppendLine("namespace UnitTests");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public class {table}ServiceTests");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        private readonly Mock<I{table}Service> _mockService;");
+            sb.AppendLine();
+            sb.AppendLine($"        public {table}ServiceTests()");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            _mockService = new Mock<I{table}Service>();");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            sb.AppendLine("        [Fact]");
+            sb.AppendLine($"        public async Task Create{table}_ShouldReturnResponse()");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            var request = new {table}Request(); // TODO: gán dữ liệu test");
+            sb.AppendLine($"            var expected = new {table}Response();");
+            sb.AppendLine($"            _mockService.Setup(s => s.CreateAsync(request)).ReturnsAsync(expected);");
+            sb.AppendLine();
+            sb.AppendLine("            var result = await _mockService.Object.CreateAsync(request);");
+            sb.AppendLine();
+            sb.AppendLine("            Assert.NotNull(result);");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            sb.AppendLine("        [Fact]");
+            sb.AppendLine($"        public async Task Get{table}ById_ShouldReturnResponse()");
+            sb.AppendLine("        {");
+            sb.AppendLine("            var id = Guid.NewGuid();");
+            sb.AppendLine($"            var expected = new {table}Response {{ Id = id }};");
+            sb.AppendLine($"            _mockService.Setup(s => s.GetByIdAsync(id)).ReturnsAsync(expected);");
+            sb.AppendLine();
+            sb.AppendLine("            var result = await _mockService.Object.GetByIdAsync(id);");
+            sb.AppendLine("            Assert.NotNull(result);");
+            sb.AppendLine("            Assert.Equal(id, result.Id);");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            sb.AppendLine("        [Fact]");
+            sb.AppendLine($"        public async Task Delete{table}_ShouldBeCalledOnce()");
+            sb.AppendLine("        {");
+            sb.AppendLine("            var id = Guid.NewGuid();");
+            sb.AppendLine("            _mockService.Setup(s => s.DeleteAsync(id)).Returns(Task.CompletedTask);");
+            sb.AppendLine();
+            sb.AppendLine("            await _mockService.Object.DeleteAsync(id);");
+            sb.AppendLine("            _mockService.Verify(s => s.DeleteAsync(id), Times.Once);");
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        #endregion
+
     }
 }
