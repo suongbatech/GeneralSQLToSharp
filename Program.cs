@@ -51,7 +51,10 @@ namespace SqlToCSharpFullGenerator
             WriteFile("Data", "IUnitOfWork.cs", GenerateIUnitOfWork());
             WriteFile("Data", "UnitOfWork.cs", GenerateUnitOfWork());
             WriteFile("Helper", "ServiceRegistration.cs", GenerateServiceRegistration());
-
+            // sau khi WriteFile AuthController.cs ...
+            WriteFile("Helper", "IRefreshTokenStore.cs", GenerateIRefreshTokenStore());
+            WriteFile("Helper", "InMemoryRefreshTokenStore.cs", GenerateInMemoryRefreshTokenStore());
+           
             WriteFile("", "Program.cs", GenerateProgramCs());
             WriteFile("", "appsettings.json", GenerateAppSettings());
             WriteFile("", "GeneratedProject.csproj", GenerateCsProj());
@@ -372,12 +375,52 @@ namespace MappingProfiles
             sb.AppendLine("    public class BaseContext : DbContext");
             sb.AppendLine("    {");
             sb.AppendLine("        public BaseContext(DbContextOptions<BaseContext> options) : base(options) {}");
+
             foreach (var t in tables)
                 sb.AppendLine($"        public DbSet<{t}> {t}Set {{ get; set; }}");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
+
+                        sb.AppendLine("    }"); // đóng class
+            sb.AppendLine("}");     // đóng namespace
+
             return sb.ToString();
         }
+
+        static string GenerateServiceRegistration() => @"
+            using Microsoft.Extensions.DependencyInjection;
+            using System.Reflection;
+
+            namespace Helper
+            {
+                public static class ServiceRegistration
+                {
+                    public static void AddRepositoriesAndServices(this IServiceCollection services)
+                    {
+                        var asm = Assembly.GetExecutingAssembly();
+
+                        // Repositories
+                        var repoInterfaces = asm.GetTypes()
+                            .Where(t => t.IsInterface && t.Name.EndsWith(""Repository""));
+                        foreach (var iface in repoInterfaces)
+                        {
+                            var impl = asm.GetTypes().FirstOrDefault(c => c.IsClass && iface.IsAssignableFrom(c));
+                            if (impl != null)
+                                services.AddScoped(iface, impl);
+                        }
+
+                        // Services
+                        var svcInterfaces = asm.GetTypes()
+                            .Where(t => t.IsInterface && t.Name.EndsWith(""Service""));
+                        foreach (var iface in svcInterfaces)
+                        {
+                            var impl = asm.GetTypes().FirstOrDefault(c => c.IsClass && iface.IsAssignableFrom(c));
+                            if (impl != null)
+                                services.AddScoped(iface, impl);
+                        }
+                    }
+                }
+            }";
+
+
 
         static string GenerateIUnitOfWork() => @"
 using System.Threading.Tasks;
@@ -438,7 +481,7 @@ namespace Data
             {
                 options.AddPolicy(""AdminOnly"", policy => policy.RequireRole(""Admin""));
             });
-
+            builder.Services.AddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
@@ -507,113 +550,150 @@ namespace Data
                 <PackageReference Include=""Microsoft.AspNetCore.Authentication.JwtBearer"" Version=""6.0.0"" />
               </ItemGroup>
             </Project>";
-
-
-        static string GenerateServiceRegistration() => @"
-using Microsoft.Extensions.DependencyInjection;
-using System.Reflection;
-
-namespace Helper
-{
-    public static class ServiceRegistration
-    {
-        public static void AddRepositoriesAndServices(this IServiceCollection services)
-        {
-            var asm = Assembly.GetExecutingAssembly();
-
-            // Repositories
-            var repoInterfaces = asm.GetTypes()
-                .Where(t => t.IsInterface && t.Name.EndsWith(""Repository""));
-            foreach (var iface in repoInterfaces)
-            {
-                var impl = asm.GetTypes().FirstOrDefault(c => c.IsClass && iface.IsAssignableFrom(c));
-                if (impl != null)
-                    services.AddScoped(iface, impl);
-            }
-
-            // Services
-            var svcInterfaces = asm.GetTypes()
-                .Where(t => t.IsInterface && t.Name.EndsWith(""Service""));
-            foreach (var iface in svcInterfaces)
-            {
-                var impl = asm.GetTypes().FirstOrDefault(c => c.IsClass && iface.IsAssignableFrom(c));
-                if (impl != null)
-                    services.AddScoped(iface, impl);
-            }
-        }
-    }
-}";
-
         static string GenerateAuthController() => @"
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
+            using Microsoft.AspNetCore.Mvc;
+            using Microsoft.IdentityModel.Tokens;
+            using Helper;
+            using System.IdentityModel.Tokens.Jwt;
+            using System.Security.Claims;
+            using System.Text;
 
-namespace Controllers
-{
-    [ApiController]
-    [Route(""api/[controller]"")]
-    public class AuthController : ControllerBase
-    {
-        private readonly IConfiguration _config;
-
-        public AuthController(IConfiguration config)
-        {
-            _config = config;
-        }
-
-        [HttpPost(""login"")]
-        public IActionResult Login([FromBody] LoginRequest req)
-        {
-            // 🚨 TODO: check DB real user. Tạm hardcode demo
-            if (req.Username == ""admin"" && req.Password == ""123"")
+            namespace Controllers
             {
-                var token = GenerateJwtToken(req.Username, ""Admin"");
-                return Ok(new { token });
-            }
-            if (req.Username == ""user"" && req.Password == ""123"")
+                [ApiController]
+                [Route(""api/[controller]"")]
+                public class AuthController : ControllerBase
+                {
+                    private readonly IConfiguration _config;
+                    private readonly IRefreshTokenStore _tokenStore;
+
+                    public AuthController(IConfiguration config, IRefreshTokenStore tokenStore)
+                    {
+                        _config = config;
+                        _tokenStore = tokenStore;
+                    }
+
+                    [HttpPost(""login"")]
+                    public IActionResult Login([FromBody] LoginRequest req)
+                    {
+                        if ((req.Username == ""admin"" && req.Password == ""123"") ||
+                            (req.Username == ""user"" && req.Password == ""123""))
+                        {
+                            var role = req.Username == ""admin"" ? ""Admin"" : ""User"";
+                            var accessToken = GenerateJwtToken(req.Username, role);
+                            var refreshToken = GenerateRefreshToken();
+
+                            _tokenStore.Save(req.Username, refreshToken, DateTime.UtcNow.AddDays(7));
+
+                            return Ok(new { accessToken, refreshToken });
+                        }
+
+                        return Unauthorized();
+                    }
+
+                    [HttpPost(""refresh"")]
+                    public IActionResult Refresh([FromBody] RefreshRequest req)
+                    {
+                        if (string.IsNullOrEmpty(req.Username) || string.IsNullOrEmpty(req.RefreshToken))
+                            return BadRequest(""Missing fields"");
+
+                        var stored = _tokenStore.Get(req.RefreshToken);
+                        if (stored == null || stored.ExpiryDate < DateTime.UtcNow || stored.Username != req.Username)
+                            return Unauthorized(""Invalid refresh token"");
+
+                        var newAccessToken = GenerateJwtToken(stored.Username, ""User"");
+                        var newRefreshToken = GenerateRefreshToken();
+
+                        _tokenStore.Remove(req.RefreshToken);
+                        _tokenStore.Save(stored.Username, newRefreshToken, DateTime.UtcNow.AddDays(7));
+
+                        return Ok(new { accessToken = newAccessToken, refreshToken = newRefreshToken });
+                    }
+
+                    private string GenerateJwtToken(string username, string role)
+                    {
+                        var jwtSection = _config.GetSection(""Jwt"");
+                        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSection[""Key""]));
+                        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+                        var claims = new[]
+                        {
+                            new Claim(JwtRegisteredClaimNames.Sub, username),
+                            new Claim(ClaimTypes.Role, role),
+                            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+                        };
+
+                        var token = new JwtSecurityToken(
+                            issuer: jwtSection[""Issuer""],
+                            audience: jwtSection[""Audience""],
+                            claims: claims,
+                            expires: DateTime.UtcNow.AddHours(1),
+                            signingCredentials: creds
+                        );
+
+                        return new JwtSecurityTokenHandler().WriteToken(token);
+                    }
+
+                    private string GenerateRefreshToken()
+                    {
+                        return Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+                    }
+                }
+
+                public class LoginRequest
+                {
+                    public string Username { get; set; }
+                    public string Password { get; set; }
+                }
+
+                public class RefreshRequest
+                {
+                    public string Username { get; set; }
+                    public string RefreshToken { get; set; }
+                }
+            }";
+
+        static string GenerateIRefreshTokenStore() => @"
+            using System;
+
+            namespace Helper
             {
-                var token = GenerateJwtToken(req.Username, ""User"");
-                return Ok(new { token });
-            }
+                public sealed record RefreshTokenInfo(string Username, string Token, DateTime ExpiryDate);
 
-            return Unauthorized();
-        }
+                public interface IRefreshTokenStore
+                {
+                    void Save(string username, string token, DateTime expiry);
+                    RefreshTokenInfo? Get(string token);
+                    void Remove(string token);
+                }
+            }";
+        static string GenerateInMemoryRefreshTokenStore() => @"
+            using System;
+            using System.Collections.Concurrent;
 
-        private string GenerateJwtToken(string username, string role)
-        {
-            var jwtSection = _config.GetSection(""Jwt"");
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSection[""Key""]));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-            var claims = new[]
+            namespace Helper
             {
-                new Claim(JwtRegisteredClaimNames.Sub, username),
-                new Claim(ClaimTypes.Role, role),
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
-            };
+                public class InMemoryRefreshTokenStore : IRefreshTokenStore
+                {
+                    private readonly ConcurrentDictionary<string, RefreshTokenInfo> _store = new();
 
-            var token = new JwtSecurityToken(
-                issuer: jwtSection[""Issuer""],
-                audience: jwtSection[""Audience""],
-                claims: claims,
-                expires: DateTime.UtcNow.AddHours(1),
-                signingCredentials: creds
-            );
+                    public void Save(string username, string token, DateTime expiry)
+                    {
+                        var info = new RefreshTokenInfo(username, token, expiry);
+                        _store[token] = info;
+                    }
 
-            return new JwtSecurityTokenHandler().WriteToken(token);
-        }
-    }
+                    public RefreshTokenInfo? Get(string token)
+                    {
+                        return _store.TryGetValue(token, out var info) ? info : null;
+                    }
 
-    public class LoginRequest
-    {
-        public string Username { get; set; }
-        public string Password { get; set; }
-    }
-}
-";
+                    public void Remove(string token)
+                    {
+                        _store.TryRemove(token, out _);
+                    }
+                }
+            }";
 
         #endregion
     }
