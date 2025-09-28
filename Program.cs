@@ -8,38 +8,12 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GeneralSQLToSharp
 {
-    #region Base UoW + IRepository
-
-    public interface IUnitOfWork : IDisposable
-    {
-        DbContext DbContext { get; }
-        Task<int> SaveChangesAsync();
-    }
-
-    public class UnitOfWork : IUnitOfWork
-    {
-        public DbContext DbContext { get; }
-        public UnitOfWork(DbContext context) => DbContext = context;
-        public Task<int> SaveChangesAsync() => DbContext.SaveChangesAsync();
-        public void Dispose() => DbContext.Dispose();
-    }
-
-    public interface IRepository<T> where T : class
-    {
-        Task<T> CreateAsync(T entity);
-        Task<T> UpdateAsync(T entity);
-        Task DeleteAsync(T entity);
-        Task<T?> GetByIdAsync(object id);
-        Task<List<T>> GetListAsync(int page, int pageSize);
-    }
-
-    #endregion
-
+    #region Helper Models
     public class ColumnInfo
     {
         public string Name { get; set; } = "";
         public string DataType { get; set; } = "";
-        public bool IsNullable { get; set; } = false; // Thêm trường
+        public bool IsNullable { get; set; }
     }
 
     public class ForeignKeyInfo
@@ -48,17 +22,18 @@ namespace GeneralSQLToSharp
         public string ReferencedTable { get; set; } = "";
         public string ReferencedColumn { get; set; } = "";
     }
+    #endregion
 
     class Program
     {
         static void Main(string[] args)
         {
-            string connectionString = "Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=t020808;TrustServerCertificate=True;";
+            string connectionString = "Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;";
             string outputPath = @"D:\Temp\Code\";
 
             Directory.CreateDirectory(outputPath);
 
-            // Generate csproj
+            // csproj
             File.WriteAllText(Path.Combine(outputPath, "GeneralCode.csproj"), @"<Project Sdk=""Microsoft.NET.Sdk.Web"">
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
@@ -73,8 +48,8 @@ namespace GeneralSQLToSharp
   </ItemGroup>
 </Project>");
 
-            // Create folders
-            string[] folders = { "Entities", "Requests", "Responses", "IRepositories", "Repositories", "IServices", "Services", "Controllers" };
+            // folders
+            string[] folders = { "Entities", "Requests", "Responses", "IRepositories", "Repositories", "IServices", "Services", "Controllers", "Data" };
             foreach (var f in folders) Directory.CreateDirectory(Path.Combine(outputPath, f));
 
             var tables = GetTables(connectionString);
@@ -94,14 +69,16 @@ namespace GeneralSQLToSharp
                 WriteToFile(Path.Combine(outputPath, "Controllers", table + "Controller.cs"), GenerateController(table));
             }
 
-            // Generate Program.cs
+            // DbContext + UoW
+            GenerateDbContextAndUnitOfWork(outputPath, tables);
+
+            // Program.cs
             WriteToFile(Path.Combine(outputPath, "Program.cs"), GenerateProgram(tables));
 
-            Console.WriteLine("Code generation GeneralSQLToSharp completed!");
+            Console.WriteLine("✅ Code generation completed!");
         }
 
         #region SQL Helpers
-
         private static List<string> GetTables(string connectionString)
         {
             var tables = new List<string>();
@@ -119,9 +96,9 @@ namespace GeneralSQLToSharp
             using var connection = new SqlConnection(connectionString);
             connection.Open();
             var cmd = new SqlCommand($@"
-        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_NAME='{table}'", connection);
+                SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME='{table}'", connection);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -162,12 +139,15 @@ WHERE k.TABLE_NAME='{table}'";
             }
             return fks;
         }
-
         #endregion
 
-        #region Generate Methods
+        #region Generate Files
+        private static void WriteToFile(string path, string content)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
 
-        // Cập nhật MapToCSharpType với nullable
         private static string MapToCSharpType(string sqlType, bool isNullable)
         {
             string type = sqlType switch
@@ -189,39 +169,20 @@ WHERE k.TABLE_NAME='{table}'";
                 "text" => "string",
                 _ => "string"
             };
-
-            // Nếu value type và nullable thì thêm '?'
             if (isNullable && type != "string")
                 type += "?";
-
             return type;
-        }
-
-        private static void WriteToFile(string path, string content)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, content);
         }
 
         private static string GenerateEntity(string table, List<ColumnInfo> columns, List<ForeignKeyInfo> fks)
         {
             var props = string.Join(Environment.NewLine, columns.Select(c =>
-      $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}"));
-
-            // Relationship 1-N navigation properties
-            var navProps = string.Join(Environment.NewLine, fks.Select(f =>
-                $"        public  {f.ReferencedTable} {f.ReferencedTable} {{ get; set; }}"));
-
-            return $@"using System.Collections.Generic;
-
-namespace Entities
+                $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}"));
+            return $@"namespace Entities
 {{
     public class {table}
     {{
 {props}
-{navProps}
-        // 1-N collections
-        public List<{table}> {table}Children {{ get; set; }} = new List<{table}>();
     }}
 }}";
         }
@@ -229,7 +190,7 @@ namespace Entities
         private static string GenerateRequest(string table, List<ColumnInfo> columns)
         {
             var props = string.Join(Environment.NewLine, columns.Select(c =>
-                 $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}"));
+                $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}"));
             return $@"namespace Requests
 {{
     public class {table}Request
@@ -242,7 +203,7 @@ namespace Entities
         private static string GenerateResponse(string table, List<ColumnInfo> columns)
         {
             var props = string.Join(Environment.NewLine, columns.Select(c =>
-                  $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}")); 
+                $"        public {MapToCSharpType(c.DataType, c.IsNullable)} {c.Name} {{ get; set; }}"));
             return $@"namespace Responses
 {{
     public class {table}Response
@@ -258,9 +219,9 @@ namespace Entities
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace Repositories
+namespace IRepositories
 {{
-    public interface I{table}Repository : IRepository<{table}>
+    public interface I{table}Repository
     {{
         Task<{table}> CreateAsync({table} entity);
         Task<{table}> UpdateAsync({table} entity);
@@ -275,6 +236,8 @@ namespace Repositories
         {
             return $@"using Entities;
 using Microsoft.EntityFrameworkCore;
+using Data;
+using IRepositories;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -283,33 +246,33 @@ namespace Repositories
 {{
     public class {table}Repository : I{table}Repository
     {{
-        private readonly IUnitOfWork _unitOfWork;
+        private readonly BaseContext _context;
         private readonly DbSet<{table}> _dbSet;
 
-        public {table}Repository(IUnitOfWork unitOfWork)
+        public {table}Repository(BaseContext context)
         {{
-            _unitOfWork = unitOfWork;
-            _dbSet = _unitOfWork.DbContext.Set<{table}>();
+            _context = context;
+            _dbSet = _context.Set<{table}>();
         }}
 
         public async Task<{table}> CreateAsync({table} entity)
         {{
             await _dbSet.AddAsync(entity);
-            await _unitOfWork.SaveChangesAsync();
+            await _context.SaveChangesAsync();
             return entity;
         }}
 
         public async Task<{table}> UpdateAsync({table} entity)
         {{
             _dbSet.Update(entity);
-            await _unitOfWork.SaveChangesAsync();
+            await _context.SaveChangesAsync();
             return entity;
         }}
 
         public async Task DeleteAsync({table} entity)
         {{
             _dbSet.Remove(entity);
-            await _unitOfWork.SaveChangesAsync();
+            await _context.SaveChangesAsync();
         }}
 
         public async Task<{table}?> GetByIdAsync(object id)
@@ -332,12 +295,12 @@ using Responses;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace Services
+namespace IServices
 {{
     public interface I{table}Service
     {{
         Task<{table}Response> CreateAsync({table}Request request);
-        Task<{table}Response> UpdateAsync(int id, {table}Request request);
+        Task<{table}Response?> UpdateAsync(int id, {table}Request request);
         Task DeleteAsync(int id);
         Task<{table}Response?> GetByIdAsync(int id);
         Task<List<{table}Response>> GetListAsync(int page, int pageSize);
@@ -351,11 +314,11 @@ namespace Services
                 $"            entity.{c.Name} = request.{c.Name};"));
             var mapToResponse = string.Join(Environment.NewLine, columns.Select(c =>
                 $"                {c.Name} = entity.{c.Name},"));
-
             return $@"using Entities;
 using Requests;
 using Responses;
-using Repositories;
+using IRepositories;
+using IServices;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -375,30 +338,29 @@ namespace Services
         {{
             var entity = new {table}();
 {mapToEntity}
-            var newEntity = await _repository.CreateAsync(entity);
+            entity = await _repository.CreateAsync(entity);
             return new {table}Response
             {{
 {mapToResponse}
             }};
         }}
 
-        public async Task<{table}Response> UpdateAsync(int id, {table}Request request)
+        public async Task<{table}Response?> UpdateAsync(int id, {table}Request request)
         {{
             var entity = await _repository.GetByIdAsync(id);
             if (entity == null) return null;
 {mapToEntity}
-            var updatedEntity = await _repository.UpdateAsync(entity);
+            entity = await _repository.UpdateAsync(entity);
             return new {table}Response
             {{
-{mapToResponse.Replace("entity.", "updatedEntity.")}
+{mapToResponse}
             }};
         }}
 
         public async Task DeleteAsync(int id)
         {{
             var entity = await _repository.GetByIdAsync(id);
-            if (entity != null)
-                await _repository.DeleteAsync(entity);
+            if (entity != null) await _repository.DeleteAsync(entity);
         }}
 
         public async Task<{table}Response?> GetByIdAsync(int id)
@@ -427,7 +389,7 @@ namespace Services
         {
             return $@"using Microsoft.AspNetCore.Mvc;
 using Requests;
-using Services;
+using IServices;
 using System.Threading.Tasks;
 
 namespace Controllers
@@ -450,21 +412,24 @@ namespace Controllers
             return Ok(response);
         }}
 
-        [HttpPut(""{{id}}"")]
+        [HttpPut(""{{
+id}}"")]
         public async Task<IActionResult> Update(int id, [FromBody] {table}Request request)
         {{
             var response = await _service.UpdateAsync(id, request);
             return Ok(response);
         }}
 
-        [HttpDelete(""{{id}}"")]
+        [HttpDelete(""{{
+id}}"")]
         public async Task<IActionResult> Delete(int id)
         {{
             await _service.DeleteAsync(id);
             return NoContent();
         }}
 
-        [HttpGet(""{{id}}"")]
+        [HttpGet(""{{
+id}}"")]
         public async Task<IActionResult> GetById(int id)
         {{
             var response = await _service.GetByIdAsync(id);
@@ -481,25 +446,61 @@ namespace Controllers
 }}";
         }
 
+        private static void GenerateDbContextAndUnitOfWork(string outputPath, List<string> tables)
+        {
+            string dataPath = Path.Combine(outputPath, "Data");
+            Directory.CreateDirectory(dataPath);
+
+            var dbContextContent = @"using Microsoft.EntityFrameworkCore;
+using Entities;
+
+namespace Data
+{
+    public class BaseContext : DbContext, IUnitOfWork
+    {
+        public BaseContext(DbContextOptions<BaseContext> options) : base(options) { }
+
+" + string.Join("\n", tables.Select(t => $"        public DbSet<{t}> {t}s {{ get; set; }}")) + @"
+
+        public async Task<int> SaveChangesAsync()
+        {
+            return await base.SaveChangesAsync();
+        }
+    }
+}";
+            File.WriteAllText(Path.Combine(dataPath, "BaseContext.cs"), dbContextContent);
+
+            var iUnitOfWorkContent = @"using System;
+using System.Threading.Tasks;
+
+namespace Data
+{
+    public interface IUnitOfWork : IDisposable
+    {
+        Task<int> SaveChangesAsync();
+    }
+}";
+            File.WriteAllText(Path.Combine(dataPath, "IUnitOfWork.cs"), iUnitOfWorkContent);
+        }
+
         private static string GenerateProgram(List<string> tables)
         {
-            var servicesRegistration = string.Join(Environment.NewLine, tables.Select(t =>
-                $"builder.Services.AddScoped<I{t}Repository, {t}Repository>();\nbuilder.Services.AddScoped<I{t}Service, {t}Service>();"));
-
+            var registrations = string.Join(Environment.NewLine, tables.Select(t =>
+                $"builder.Services.AddScoped<I{t}Repository, {t}Repository>();\n    builder.Services.AddScoped<I{t}Service, {t}Service>();"));
             return $@"using Microsoft.EntityFrameworkCore;
+using Data;
+using IRepositories;
 using Repositories;
+using IServices;
 using Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add DbContext
-builder.Services.AddDbContext<DbContext>(options =>
+builder.Services.AddDbContext<BaseContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString(""DefaultConnection"")));
 
-// Register Repositories & Services
-{servicesRegistration}
+{registrations}
 
-// Add Controllers & Swagger
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -517,7 +518,6 @@ app.UseAuthorization();
 app.MapControllers();
 app.Run();";
         }
-
         #endregion
     }
 }
