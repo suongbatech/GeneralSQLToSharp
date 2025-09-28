@@ -5,20 +5,21 @@ using System.Text;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace GeneralSqlToCSharp
+namespace SqlToCSharpGenerator
 {
     class Program
     {
         static string connectionString = "Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;";
-        static string outputPath = @"D:\\Temp\\Code";
+        static string outputPath = @"D:\Temp\GeneratedProject";
 
         static void Main(string[] args)
         {
-            // Create folder structure
+            // 1. Create folder structure
             var folders = new[] { "Entities", "Requests", "Responses", "IRepositories", "Repositories", "IServices", "Services", "Controllers", "MappingProfiles", "Data" };
             foreach (var f in folders)
                 Directory.CreateDirectory(Path.Combine(outputPath, f));
 
+            // 2. Generate files
             using var connection = new SqlConnection(connectionString);
             connection.Open();
 
@@ -31,20 +32,25 @@ namespace GeneralSqlToCSharp
                 WriteToFile(Path.Combine(outputPath, "Requests", table + "Request.cs"), GenerateRequest(table, columns));
                 WriteToFile(Path.Combine(outputPath, "Responses", table + "Response.cs"), GenerateResponse(table, columns));
                 WriteToFile(Path.Combine(outputPath, "IRepositories", "I" + table + "Repository.cs"), GenerateRepositoryInterface(table));
-                WriteToFile(Path.Combine(outputPath, "Repositories", table + "Repository.cs"), GenerateRepositoryImpl(table, columns));
+                WriteToFile(Path.Combine(outputPath, "Repositories", table + "Repository.cs"), GenerateRepositoryImpl(table));
                 WriteToFile(Path.Combine(outputPath, "IServices", "I" + table + "Service.cs"), GenerateServiceInterface(table));
-                WriteToFile(Path.Combine(outputPath, "Services", table + "Service.cs"), GenerateServiceImpl(table, columns));
-                WriteToFile(Path.Combine(outputPath, "Controllers", table + "Controller.cs"), GenerateController(table, columns));
-                WriteToFile(Path.Combine(outputPath, "MappingProfiles", table + "Profile.cs"), GenerateMappingProfile(table, columns));
+                WriteToFile(Path.Combine(outputPath, "Services", table + "Service.cs"), GenerateServiceImpl(table));
+                WriteToFile(Path.Combine(outputPath, "Controllers", table + "Controller.cs"), GenerateController(table));
+                WriteToFile(Path.Combine(outputPath, "MappingProfiles", table + "Profile.cs"), GenerateMappingProfile(table));
             }
 
-            // BaseContext + UnitOfWork
             WriteToFile(Path.Combine(outputPath, "Data", "BaseContext.cs"), GenerateBaseContext(tables));
             WriteToFile(Path.Combine(outputPath, "Data", "IUnitOfWork.cs"), GenerateIUnitOfWork());
             WriteToFile(Path.Combine(outputPath, "Data", "UnitOfWork.cs"), GenerateUnitOfWork());
 
+            // Program.cs
+            WriteToFile(Path.Combine(outputPath, "Program.cs"), GenerateProgramCs(tables));
+
+            // appsettings.json
+            WriteToFile(Path.Combine(outputPath, "appsettings.json"), GenerateAppSettings());
+
             // csproj
-            WriteToFile(Path.Combine(outputPath, "GeneralSqlToCSharp.csproj"), GenerateCsProj());
+            WriteToFile(Path.Combine(outputPath, "GeneratedProject.csproj"), GenerateCsProj());
 
             Console.WriteLine("✅ Done generating all files!");
         }
@@ -62,14 +68,11 @@ namespace GeneralSqlToCSharp
         static List<(string Name, string Type)> GetColumns(SqlConnection connection, string table)
         {
             var columns = new List<(string, string)>();
-            using var cmd = new SqlCommand(
-                "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME=@Table", connection);
+            using var cmd = new SqlCommand("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME=@Table", connection);
             cmd.Parameters.AddWithValue("@Table", table);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
-            {
                 columns.Add((reader.GetString(0), SqlTypeToCSharp(reader.GetString(1))));
-            }
             return columns;
         }
 
@@ -95,57 +98,44 @@ namespace GeneralSqlToCSharp
         static string GenerateEntity(string table, List<(string Name, string Type)> columns)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("namespace Entities");
-            sb.AppendLine("{");
-            sb.AppendLine($"    public class {table}");
-            sb.AppendLine("    {");
+            sb.AppendLine("namespace Entities {");
+            sb.AppendLine($"    public class {table} {{");
             foreach (var col in columns)
                 sb.AppendLine($"        public {col.Type} {col.Name} {{ get; set; }}");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
+            sb.AppendLine("    } }");
             return sb.ToString();
         }
 
         static string GenerateRequest(string table, List<(string Name, string Type)> columns)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("namespace Requests");
-            sb.AppendLine("{");
-            sb.AppendLine($"    public class {table}Request");
-            sb.AppendLine("    {");
+            sb.AppendLine("namespace Requests {");
+            sb.AppendLine($"    public class {table}Request {{");
             foreach (var col in columns)
                 sb.AppendLine($"        public {col.Type} {col.Name} {{ get; set; }}");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
+            sb.AppendLine("    } }");
             return sb.ToString();
         }
 
         static string GenerateResponse(string table, List<(string Name, string Type)> columns)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("namespace Responses");
-            sb.AppendLine("{");
-            sb.AppendLine($"    public class {table}Response");
-            sb.AppendLine("    {");
+            sb.AppendLine("namespace Responses {");
+            sb.AppendLine($"    public class {table}Response {{");
             foreach (var col in columns)
                 sb.AppendLine($"        public {col.Type} {col.Name} {{ get; set; }}");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
+            sb.AppendLine("    } }");
             return sb.ToString();
         }
 
-        static string GenerateRepositoryInterface(string table)
-        {
-            return $@"
-using Entities;
+        static string GenerateRepositoryInterface(string table) =>
+$@"using Entities;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace IRepositories
-{{
-    public interface I{table}Repository
-    {{
+namespace IRepositories {{
+    public interface I{table}Repository {{
         Task<{table}> GetByIdAsync(Guid id);
         Task<IEnumerable<{table}>> GetAllAsync();
         Task<{table}> AddAsync({table} entity);
@@ -153,64 +143,50 @@ namespace IRepositories
         Task DeleteAsync(Guid id);
     }}
 }}";
-        }
 
-        static string GenerateRepositoryImpl(string table, List<(string Name, string Type)> columns)
-        {
-            return $@"
-using Entities;
+        static string GenerateRepositoryImpl(string table) =>
+$@"using Entities;
 using IRepositories;
 using Data;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace Repositories
-{{
-    public class {table}Repository : I{table}Repository
-    {{
+namespace Repositories {{
+    public class {table}Repository : I{table}Repository {{
         private readonly BaseContext _context;
         public {table}Repository(BaseContext context) => _context = context;
 
         public async Task<{table}> GetByIdAsync(Guid id) => await _context.Set<{table}>().FindAsync(id);
         public async Task<IEnumerable<{table}>> GetAllAsync() => await Task.FromResult(_context.Set<{table}>());
-        public async Task<{table}> AddAsync({table} entity)
-        {{
+        public async Task<{table}> AddAsync({table} entity) {{
             _context.Set<{table}>().Add(entity);
             await _context.SaveChangesAsync();
             return entity;
         }}
-        public async Task UpdateAsync({table} entity)
-        {{
+        public async Task UpdateAsync({table} entity) {{
             _context.Set<{table}>().Update(entity);
             await _context.SaveChangesAsync();
         }}
-        public async Task DeleteAsync(Guid id)
-        {{
+        public async Task DeleteAsync(Guid id) {{
             var entity = await GetByIdAsync(id);
-            if(entity != null)
-            {{
+            if (entity != null) {{
                 _context.Set<{table}>().Remove(entity);
                 await _context.SaveChangesAsync();
             }}
         }}
     }}
 }}";
-        }
 
-        static string GenerateServiceInterface(string table)
-        {
-            return $@"
-using Requests;
+        static string GenerateServiceInterface(string table) =>
+$@"using Requests;
 using Responses;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace IServices
-{{
-    public interface I{table}Service
-    {{
+namespace IServices {{
+    public interface I{table}Service {{
         Task<{table}Response> GetByIdAsync(Guid id);
         Task<IEnumerable<{table}Response>> GetAllAsync();
         Task<{table}Response> CreateAsync({table}Request request);
@@ -218,52 +194,47 @@ namespace IServices
         Task DeleteAsync(Guid id);
     }}
 }}";
-        }
 
-        static string GenerateServiceImpl(string table, List<(string Name, string Type)> columns)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("using Entities;");
-            sb.AppendLine("using IServices;");
-            sb.AppendLine("using IRepositories;");
-            sb.AppendLine("using Requests;");
-            sb.AppendLine("using Responses;");
-            sb.AppendLine("using Data;");
-            sb.AppendLine("using AutoMapper;");
-            sb.AppendLine("using System;");
-            sb.AppendLine("using System.Linq;");
-            sb.AppendLine("using System.Collections.Generic;");
-            sb.AppendLine("using System.Threading.Tasks;");
-            sb.AppendLine($"namespace Services {{");
-            sb.AppendLine($"    public class {table}Service : I{table}Service {{");
-            sb.AppendLine($"        private readonly I{table}Repository _repo;");
-            sb.AppendLine($"        private readonly IUnitOfWork _uow;");
-            sb.AppendLine($"        private readonly IMapper _mapper;");
-            sb.AppendLine($"        public {table}Service(I{table}Repository repo, IUnitOfWork uow, IMapper mapper) => (_repo, _uow, _mapper) = (repo, uow, mapper);");
+        static string GenerateServiceImpl(string table) =>
+$@"using Entities;
+using IServices;
+using IRepositories;
+using Requests;
+using Responses;
+using Data;
+using AutoMapper;
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
-            sb.AppendLine($@"
-        public async Task<{table}Response> GetByIdAsync(Guid id)
-        {{
+namespace Services {{
+    public class {table}Service : I{table}Service {{
+        private readonly I{table}Repository _repo;
+        private readonly IUnitOfWork _uow;
+        private readonly IMapper _mapper;
+
+        public {table}Service(I{table}Repository repo, IUnitOfWork uow, IMapper mapper)
+            => (_repo, _uow, _mapper) = (repo, uow, mapper);
+
+        public async Task<{table}Response> GetByIdAsync(Guid id) {{
             var entity = await _repo.GetByIdAsync(id);
             return entity == null ? null : _mapper.Map<{table}Response>(entity);
         }}
 
-        public async Task<IEnumerable<{table}Response>> GetAllAsync()
-        {{
+        public async Task<IEnumerable<{table}Response>> GetAllAsync() {{
             var list = await _repo.GetAllAsync();
             return list.Select(_mapper.Map<{table}Response>);
         }}
 
-        public async Task<{table}Response> CreateAsync({table}Request request)
-        {{
+        public async Task<{table}Response> CreateAsync({table}Request request) {{
             var entity = _mapper.Map<{table}>(request);
             await _repo.AddAsync(entity);
             await _uow.SaveChangesAsync();
             return _mapper.Map<{table}Response>(entity);
         }}
 
-        public async Task UpdateAsync(Guid id, {table}Request request)
-        {{
+        public async Task UpdateAsync(Guid id, {table}Request request) {{
             var entity = await _repo.GetByIdAsync(id);
             if(entity == null) throw new Exception(""Not found"");
             _mapper.Map(request, entity);
@@ -271,31 +242,25 @@ namespace IServices
             await _uow.SaveChangesAsync();
         }}
 
-        public async Task DeleteAsync(Guid id)
-        {{
+        public async Task DeleteAsync(Guid id) {{
             await _repo.DeleteAsync(id);
             await _uow.SaveChangesAsync();
         }}
-    }} }}");
-            return sb.ToString();
-        }
+    }}
+}}";
 
-        static string GenerateController(string table, List<(string Name, string Type)> columns)
-        {
-            return $@"
-using Microsoft.AspNetCore.Mvc;
+        static string GenerateController(string table) =>
+$@"using Microsoft.AspNetCore.Mvc;
 using IServices;
 using Requests;
 using Responses;
 using System;
 using System.Threading.Tasks;
 
-namespace Controllers
-{{
+namespace Controllers {{
     [ApiController]
     [Route(""api/[controller]"")]
-    public class {table}Controller : ControllerBase
-    {{
+    public class {table}Controller : ControllerBase {{
         private readonly I{table}Service _service;
         public {table}Controller(I{table}Service service) => _service = service;
 
@@ -309,42 +274,33 @@ namespace Controllers
         public async Task<IActionResult> Create({table}Request request) => Ok(await _service.CreateAsync(request));
 
         [HttpPut(""{{id}}"")]
-        public async Task<IActionResult> Update(Guid id, {table}Request request)
-        {{
+        public async Task<IActionResult> Update(Guid id, {table}Request request) {{
             await _service.UpdateAsync(id, request);
             return Ok();
         }}
 
         [HttpDelete(""{{id}}"")]
-        public async Task<IActionResult> Delete(Guid id)
-        {{
+        public async Task<IActionResult> Delete(Guid id) {{
             await _service.DeleteAsync(id);
             return Ok();
         }}
     }}
 }}";
-        }
 
-        static string GenerateMappingProfile(string table, List<(string Name, string Type)> columns)
-        {
-            return $@"
-using AutoMapper;
+        static string GenerateMappingProfile(string table) =>
+$@"using AutoMapper;
 using Entities;
 using Requests;
 using Responses;
 
-namespace MappingProfiles
-{{
-    public class {table}Profile : Profile
-    {{
-        public {table}Profile()
-        {{
+namespace MappingProfiles {{
+    public class {table}Profile : Profile {{
+        public {table}Profile() {{
             CreateMap<{table}Request, {table}>();
             CreateMap<{table}, {table}Response>();
         }}
     }}
 }}";
-        }
 
         static string GenerateBaseContext(List<string> tables)
         {
@@ -368,6 +324,53 @@ namespace Data { public interface IUnitOfWork { Task<int> SaveChangesAsync(); } 
 @"using System.Threading.Tasks;
 namespace Data { public class UnitOfWork : IUnitOfWork { private readonly BaseContext _context; public UnitOfWork(BaseContext context) => _context = context; public Task<int> SaveChangesAsync() => _context.SaveChangesAsync(); } }";
 
+        static string GenerateProgramCs(List<string> tables)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("using Microsoft.AspNetCore.Builder;");
+            sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
+            sb.AppendLine("using Microsoft.EntityFrameworkCore;");
+            sb.AppendLine("using AutoMapper;");
+            sb.AppendLine("using IRepositories;");
+            sb.AppendLine("using Repositories;");
+            sb.AppendLine("using IServices;");
+            sb.AppendLine("using Services;");
+            sb.AppendLine("using Data;");
+            sb.AppendLine("var builder = WebApplication.CreateBuilder(args);");
+            sb.AppendLine("builder.Services.AddControllers();");
+            sb.AppendLine("builder.Services.AddEndpointsApiExplorer();");
+            sb.AppendLine("builder.Services.AddSwaggerGen();");
+            sb.AppendLine("builder.Services.AddDbContext<BaseContext>(opt => opt.UseSqlServer(builder.Configuration.GetConnectionString(\"DefaultConnection\")));");
+            sb.AppendLine("builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();");
+            foreach (var t in tables)
+            {
+                sb.AppendLine($"builder.Services.AddScoped<I{t}Repository, {t}Repository>();");
+                sb.AppendLine($"builder.Services.AddScoped<I{t}Service, {t}Service>();");
+            }
+            sb.AppendLine("builder.Services.AddAutoMapper(typeof(Program));");
+            sb.AppendLine("var app = builder.Build();");
+            sb.AppendLine("app.UseSwagger(); app.UseSwaggerUI();");
+            sb.AppendLine("app.UseHttpsRedirection();");
+            sb.AppendLine("app.UseAuthorization();");
+            sb.AppendLine("app.MapControllers();");
+            sb.AppendLine("app.Run();");
+            return sb.ToString();
+        }
+
+        static string GenerateAppSettings() =>
+@"{
+  ""ConnectionStrings"": {
+    ""DefaultConnection"": ""Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;""
+  },
+  ""Logging"": {
+    ""LogLevel"": {
+      ""Default"": ""Information"",
+      ""Microsoft.AspNetCore"": ""Warning""
+    }
+  },
+  ""AllowedHosts"": ""*""
+}";
+
         static string GenerateCsProj() =>
 @"<Project Sdk=""Microsoft.NET.Sdk.Web"">
   <PropertyGroup>
@@ -381,6 +384,7 @@ namespace Data { public class UnitOfWork : IUnitOfWork { private readonly BaseCo
     <PackageReference Include=""Microsoft.EntityFrameworkCore.Tools"" Version=""6.0.0"" />
     <PackageReference Include=""AutoMapper"" Version=""12.0.0"" />
     <PackageReference Include=""AutoMapper.Extensions.Microsoft.DependencyInjection"" Version=""12.0.0"" />
+    <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.5.0"" />
   </ItemGroup>
 </Project>";
     }
