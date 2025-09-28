@@ -46,6 +46,7 @@ namespace SqlToCSharpFullGenerator
                 WriteFile("SQL", table + "_CRUD.sql", GenerateSqlCrud(table, columns, pk));
             }
 
+            WriteFile("Controllers", "AuthController.cs", GenerateAuthController());
             WriteFile("Data", "BaseContext.cs", GenerateBaseContext(tables));
             WriteFile("Data", "IUnitOfWork.cs", GenerateIUnitOfWork());
             WriteFile("Data", "UnitOfWork.cs", GenerateUnitOfWork());
@@ -144,22 +145,22 @@ namespace SqlToCSharpFullGenerator
         }
 
         static string GenerateRepositoryInterface(string table) => $@"
-using Entities;
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
+        using Entities;
+        using System;
+        using System.Collections.Generic;
+        using System.Threading.Tasks;
 
-namespace IRepositories
-{{
-    public interface I{table}Repository
-    {{
-        Task<{table}> GetByIdAsync(Guid id);
-        Task<IEnumerable<{table}>> GetAllAsync();
-        Task<{table}> AddAsync({table} entity);
-        Task UpdateAsync({table} entity);
-        Task DeleteAsync(Guid id);
-    }}
-}}";
+        namespace IRepositories
+        {{
+            public interface I{table}Repository
+            {{
+                Task<{table}> GetByIdAsync(Guid id);
+                Task<IEnumerable<{table}>> GetAllAsync();
+                Task<{table}> AddAsync({table} entity);
+                Task UpdateAsync({table} entity);
+                Task DeleteAsync(Guid id);
+            }}
+        }}";
 
         static string GenerateRepositoryImpl(string table) => $@"
 using Entities;
@@ -395,45 +396,89 @@ namespace Data
 }";
 
         static string GenerateProgramCs() => @"
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.EntityFrameworkCore;
-using Data;
-using AutoMapper;
-using Helper;
+            using Microsoft.AspNetCore.Builder;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.Hosting;
+            using Microsoft.EntityFrameworkCore;
+            using Data;
+            using AutoMapper;
+            using Helper;
+            using Microsoft.AspNetCore.Authentication.JwtBearer;
+            using Microsoft.IdentityModel.Tokens;
+            using System.Text;
 
-var builder = WebApplication.CreateBuilder(args);
+            var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<BaseContext>(opt =>
-    opt.UseSqlServer(builder.Configuration.GetConnectionString(""DefaultConnection"")));
-builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
-builder.Services.AddRepositoriesAndServices();
-builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
+            // DB
+            builder.Services.AddDbContext<BaseContext>(opt =>
+                opt.UseSqlServer(builder.Configuration.GetConnectionString(""DefaultConnection"")));
+            builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+            builder.Services.AddRepositoriesAndServices();
+            builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
 
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+            // Auth
+            var jwtSection = builder.Configuration.GetSection(""Jwt"");
+            builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+                .AddJwtBearer(options =>
+                {
+                    options.TokenValidationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuer = true,
+                        ValidateAudience = true,
+                        ValidateLifetime = true,
+                        ValidateIssuerSigningKey = true,
+                        ValidIssuer = jwtSection[""Issuer""],
+                        ValidAudience = jwtSection[""Audience""],
+                        IssuerSigningKey = new SymmetricSecurityKey(
+                            Encoding.UTF8.GetBytes(jwtSection[""Key""]))
+                    };
+                });
 
-var app = builder.Build();
+            builder.Services.AddAuthorization(options =>
+            {
+                options.AddPolicy(""AdminOnly"", policy => policy.RequireRole(""Admin""));
+            });
 
-// Auto migrate DB
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<BaseContext>();
-    db.Database.Migrate();
-}
+            builder.Services.AddControllers();
+            builder.Services.AddEndpointsApiExplorer();
+            builder.Services.AddSwaggerGen();
 
-app.UseSwagger();
-app.UseSwaggerUI();
-app.MapControllers();
-app.Run();
-";
+            var app = builder.Build();
+
+            // Auto migrate DB
+            using (var scope = app.Services.CreateScope())
+            {
+                //var db = scope.ServiceProvider.GetRequiredService<BaseContext>();
+                //db.Database.Migrate();
+            }
+
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseSwagger();
+                app.UseSwaggerUI(c =>
+                {
+                    c.SwaggerEndpoint(""/swagger/v1/swagger.json"", ""Generated API v1"");
+                    c.RoutePrefix = string.Empty; // 👉 Mặc định mở swagger tại http://localhost:xxxx/
+                });
+            }
+
+            app.UseAuthentication();
+            app.UseAuthorization();
+
+            app.MapControllers();
+
+            app.Run();
+            ";
 
         static string GenerateAppSettings() => @"
 {
   ""ConnectionStrings"": {
     ""DefaultConnection"": ""Server=127.0.0.1;Database=MinaCloudAdmin;User Id=sa;Password=1;TrustServerCertificate=True;""
+  },
+  ""Jwt"": {
+    ""Key"": ""ThisIsASecretKeyForJwtToken123!"",
+    ""Issuer"": ""MyAppIssuer"",
+    ""Audience"": ""MyAppAudience""
   },
   ""Logging"": {
     ""LogLevel"": {
@@ -446,21 +491,23 @@ app.Run();
 ";
 
         static string GenerateCsProj() => @"
-<Project Sdk=""Microsoft.NET.Sdk.Web"">
-  <PropertyGroup>
-    <TargetFramework>net6.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include=""Microsoft.EntityFrameworkCore"" Version=""6.0.0"" />
-    <PackageReference Include=""Microsoft.EntityFrameworkCore.SqlServer"" Version=""6.0.0"" />
-    <PackageReference Include=""Microsoft.EntityFrameworkCore.Tools"" Version=""6.0.0"" />
-    <PackageReference Include=""AutoMapper"" Version=""12.0.0"" />
-    <PackageReference Include=""AutoMapper.Extensions.Microsoft.DependencyInjection"" Version=""12.0.0"" />
-    <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.4.0"" />
-  </ItemGroup>
-</Project>";
+            <Project Sdk=""Microsoft.NET.Sdk.Web"">
+              <PropertyGroup>
+                <TargetFramework>net6.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <ImplicitUsings>enable</ImplicitUsings>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include=""Microsoft.EntityFrameworkCore"" Version=""6.0.0"" />
+                <PackageReference Include=""Microsoft.EntityFrameworkCore.SqlServer"" Version=""6.0.0"" />
+                <PackageReference Include=""Microsoft.EntityFrameworkCore.Tools"" Version=""6.0.0"" />
+                <PackageReference Include=""AutoMapper"" Version=""12.0.0"" />
+                <PackageReference Include=""AutoMapper.Extensions.Microsoft.DependencyInjection"" Version=""12.0.0"" />
+                <PackageReference Include=""Swashbuckle.AspNetCore"" Version=""6.4.0"" />
+                <PackageReference Include=""Microsoft.AspNetCore.Authentication.JwtBearer"" Version=""6.0.0"" />
+              </ItemGroup>
+            </Project>";
+
 
         static string GenerateServiceRegistration() => @"
 using Microsoft.Extensions.DependencyInjection;
@@ -496,6 +543,77 @@ namespace Helper
         }
     }
 }";
+
+        static string GenerateAuthController() => @"
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+
+namespace Controllers
+{
+    [ApiController]
+    [Route(""api/[controller]"")]
+    public class AuthController : ControllerBase
+    {
+        private readonly IConfiguration _config;
+
+        public AuthController(IConfiguration config)
+        {
+            _config = config;
+        }
+
+        [HttpPost(""login"")]
+        public IActionResult Login([FromBody] LoginRequest req)
+        {
+            // 🚨 TODO: check DB real user. Tạm hardcode demo
+            if (req.Username == ""admin"" && req.Password == ""123"")
+            {
+                var token = GenerateJwtToken(req.Username, ""Admin"");
+                return Ok(new { token });
+            }
+            if (req.Username == ""user"" && req.Password == ""123"")
+            {
+                var token = GenerateJwtToken(req.Username, ""User"");
+                return Ok(new { token });
+            }
+
+            return Unauthorized();
+        }
+
+        private string GenerateJwtToken(string username, string role)
+        {
+            var jwtSection = _config.GetSection(""Jwt"");
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSection[""Key""]));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var claims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, username),
+                new Claim(ClaimTypes.Role, role),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
+
+            var token = new JwtSecurityToken(
+                issuer: jwtSection[""Issuer""],
+                audience: jwtSection[""Audience""],
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(1),
+                signingCredentials: creds
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+    }
+
+    public class LoginRequest
+    {
+        public string Username { get; set; }
+        public string Password { get; set; }
+    }
+}
+";
 
         #endregion
     }
