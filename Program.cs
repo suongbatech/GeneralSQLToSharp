@@ -714,64 +714,72 @@ namespace Data
         #region UnitTest Generator
         static string GenerateUnitTest(string table)
         {
-            var sb = new StringBuilder();
+            return $@"
+using System;
+using System.Threading.Tasks;
+using Xunit;
+using Moq;
+using Entities;
+using Requests;
+using Responses;
+using IServices;
+using IRepositories;
+using AutoMapper;
+using Data;
+using Services;
 
-            sb.AppendLine("using System;");
-            sb.AppendLine("using System.Threading.Tasks;");
-            sb.AppendLine("using Moq;");
-            sb.AppendLine("using Xunit;");
-            sb.AppendLine("using IServices;");
-            sb.AppendLine("using Requests;");
-            sb.AppendLine("using Responses;");
-            sb.AppendLine();
-            sb.AppendLine("namespace UnitTests");
-            sb.AppendLine("{");
-            sb.AppendLine($"    public class {table}ServiceTests");
-            sb.AppendLine("    {");
-            sb.AppendLine($"        private readonly Mock<I{table}Service> _mockService;");
-            sb.AppendLine();
-            sb.AppendLine($"        public {table}ServiceTests()");
-            sb.AppendLine("        {");
-            sb.AppendLine($"            _mockService = new Mock<I{table}Service>();");
-            sb.AppendLine("        }");
-            sb.AppendLine();
-            sb.AppendLine("        [Fact]");
-            sb.AppendLine($"        public async Task Create{table}_ShouldReturnResponse()");
-            sb.AppendLine("        {");
-            sb.AppendLine($"            var request = new {table}Request(); // TODO: gán dữ liệu test");
-            sb.AppendLine($"            var expected = new {table}Response();");
-            sb.AppendLine($"            _mockService.Setup(s => s.CreateAsync(request)).ReturnsAsync(expected);");
-            sb.AppendLine();
-            sb.AppendLine("            var result = await _mockService.Object.CreateAsync(request);");
-            sb.AppendLine();
-            sb.AppendLine("            Assert.NotNull(result);");
-            sb.AppendLine("        }");
-            sb.AppendLine();
-            sb.AppendLine("        [Fact]");
-            sb.AppendLine($"        public async Task Get{table}ById_ShouldReturnResponse()");
-            sb.AppendLine("        {");
-            sb.AppendLine("            var id = Guid.NewGuid();");
-            sb.AppendLine($"            var expected = new {table}Response {{ Id = id }};");
-            sb.AppendLine($"            _mockService.Setup(s => s.GetByIdAsync(id)).ReturnsAsync(expected);");
-            sb.AppendLine();
-            sb.AppendLine("            var result = await _mockService.Object.GetByIdAsync(id);");
-            sb.AppendLine("            Assert.NotNull(result);");
-            sb.AppendLine("            Assert.Equal(id, result.Id);");
-            sb.AppendLine("        }");
-            sb.AppendLine();
-            sb.AppendLine("        [Fact]");
-            sb.AppendLine($"        public async Task Delete{table}_ShouldBeCalledOnce()");
-            sb.AppendLine("        {");
-            sb.AppendLine("            var id = Guid.NewGuid();");
-            sb.AppendLine("            _mockService.Setup(s => s.DeleteAsync(id)).Returns(Task.CompletedTask);");
-            sb.AppendLine();
-            sb.AppendLine("            await _mockService.Object.DeleteAsync(id);");
-            sb.AppendLine("            _mockService.Verify(s => s.DeleteAsync(id), Times.Once);");
-            sb.AppendLine("        }");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
+namespace UnitTests
+{{
+    public class {table}ServiceTests
+    {{
+        private readonly Mock<I{table}Repository> _repoMock;
+        private readonly Mock<IUnitOfWork> _uowMock;
+        private readonly Mock<IMapper> _mapperMock;
+        private readonly {table}Service _service;
 
-            return sb.ToString();
+        public {table}ServiceTests()
+        {{
+            _repoMock = new Mock<I{table}Repository>();
+            _uowMock = new Mock<IUnitOfWork>();
+            _mapperMock = new Mock<IMapper>();
+
+            _service = new {table}Service(_repoMock.Object, _uowMock.Object, _mapperMock.Object);
+        }}
+
+        [Fact]
+        public async Task Create_Get_Update_Delete_Workflow()
+        {{
+            var request = new {table}Request();// TODO: Populate with test data
+            var entity = new {table}();
+            var response = new {table}Response();// TODO: Populate with test data
+
+            // Setup AutoMapper
+            _mapperMock.Setup(m => m.Map<{table}>(It.IsAny<{table}Request>())).Returns(entity);
+            _mapperMock.Setup(m => m.Map<{table}Response>(It.IsAny<{table}>())).Returns(response);
+
+            // Setup repository
+            _repoMock.Setup(r => r.AddAsync(It.IsAny<{table}>())).ReturnsAsync(entity);
+            _repoMock.Setup(r => r.GetByIdAsync(It.IsAny<Guid>())).ReturnsAsync(entity);
+
+            // Create
+            var created = await _service.CreateAsync(request);
+            Assert.NotNull(created);
+
+            // Get
+            var fetched = await _service.GetByIdAsync(Guid.NewGuid());
+            Assert.NotNull(fetched);
+
+            // Update
+            await _service.UpdateAsync(Guid.NewGuid(), request);
+            _repoMock.Verify(r => r.UpdateAsync(entity), Times.Once);
+
+            // Delete
+            _repoMock.Setup(r => r.DeleteAsync(It.IsAny<Guid>())).Returns(Task.CompletedTask);
+            await _service.DeleteAsync(Guid.NewGuid());
+            _repoMock.Verify(r => r.DeleteAsync(It.IsAny<Guid>()), Times.Once);
+        }}
+    }}
+}}";
         }
 
         #endregion
