@@ -31,6 +31,7 @@ namespace SqlToCSharpFullGenerator
             var tables = GetTables(conn);
             foreach (var table in tables)
             {
+
                 var columns = GetColumns(conn, table);
                 var pk = columns.First().Name; // tạm lấy cột đầu làm khóa
 
@@ -45,9 +46,11 @@ namespace SqlToCSharpFullGenerator
                 WriteFile("MappingProfiles", table + "Profile.cs", GenerateMappingProfile(table));
                 WriteFile("SQL", table + "_CRUD.sql", GenerateSqlCrud(table, columns, pk));
             }
+            var tableKeys = GetTableKeys(conn);
+            var tableFks = GetTableFks(conn);
 
             WriteFile("Controllers", "AuthController.cs", GenerateAuthController());
-            WriteFile("Data", "BaseContext.cs", GenerateBaseContext(tables));
+            WriteFile("Data", "BaseContext.cs", GenerateBaseContext("Data", tableKeys, tableFks));
             WriteFile("Data", "IUnitOfWork.cs", GenerateIUnitOfWork());
             WriteFile("Data", "UnitOfWork.cs", GenerateUnitOfWork());
             WriteFile("Helper", "ServiceRegistration.cs", GenerateServiceRegistration());
@@ -56,7 +59,7 @@ namespace SqlToCSharpFullGenerator
             WriteFile("Helper", "InMemoryRefreshTokenStore.cs", GenerateInMemoryRefreshTokenStore());
 
             // Tạo UnitTest mẫu cho bảng User
-            var tablesUnitTest = new List<string> { "User", "UserRoles" };
+            var tablesUnitTest = tables;// new List<string> { "User", "UserRoles" };
             foreach (var tableUnitTest in tablesUnitTest)
             {
                 WriteFile("UnitTest", tableUnitTest + "ServiceTests.cs", GenerateUnitTest(tableUnitTest));
@@ -65,6 +68,8 @@ namespace SqlToCSharpFullGenerator
             WriteFile("", "Program.cs", GenerateProgramCs());
             WriteFile("", "appsettings.json", GenerateAppSettings());
             WriteFile("", "GeneratedProject.csproj", GenerateCsProj());
+
+            //EfCodeGen.GeneralEntity.GeneralEntityFile(ConnectionString, OutputPath);
 
             Console.WriteLine("✅ All files generated successfully!");
             Console.WriteLine("👉 Tiếp theo, chạy: dotnet ef migrations add Init && dotnet ef database update");
@@ -114,9 +119,14 @@ namespace SqlToCSharpFullGenerator
         static string GenerateEntity(string table, List<(string Name, string Type)> cols)
         {
             var sb = new StringBuilder();
+         
             sb.AppendLine("using System;");
+            sb.AppendLine("using System.ComponentModel.DataAnnotations;");
+            sb.AppendLine("using System.ComponentModel.DataAnnotations.Schema;");
+
             sb.AppendLine("namespace Entities");
             sb.AppendLine("{");
+            sb.AppendLine($"[Table(\"{table}\")]");
             sb.AppendLine($"    public class {table}");
             sb.AppendLine("    {");
             foreach (var c in cols)
@@ -164,11 +174,11 @@ namespace SqlToCSharpFullGenerator
         {{
             public interface I{table}Repository
             {{
-                Task<{table}> GetByIdAsync(Guid id);
+                Task<{table}> GetByIdAsync(int id);
                 Task<IEnumerable<{table}>> GetAllAsync();
                 Task<{table}> AddAsync({table} entity);
                 Task UpdateAsync({table} entity);
-                Task DeleteAsync(Guid id);
+                Task DeleteAsync(int id);
             }}
         }}";
 
@@ -194,7 +204,7 @@ namespace Repositories
             _db = context.Set<{table}>();
         }}
 
-        public async Task<{table}> GetByIdAsync(Guid id) => await _db.FindAsync(id);
+        public async Task<{table}> GetByIdAsync(int id) => await _db.FindAsync(id);
 
         public async Task<IEnumerable<{table}>> GetAllAsync() => await _db.ToListAsync();
 
@@ -211,7 +221,7 @@ namespace Repositories
             await _context.SaveChangesAsync();
         }}
 
-        public async Task DeleteAsync(Guid id)
+        public async Task DeleteAsync(int id)
         {{
             var entity = await _db.FindAsync(id);
             if (entity != null)
@@ -234,11 +244,11 @@ namespace IServices
 {{
     public interface I{table}Service
     {{
-        Task<{table}Response> GetByIdAsync(Guid id);
+        Task<{table}Response> GetByIdAsync(int id);
         Task<IEnumerable<{table}Response>> GetAllAsync();
         Task<{table}Response> CreateAsync({table}Request req);
-        Task UpdateAsync(Guid id, {table}Request req);
-        Task DeleteAsync(Guid id);
+        Task UpdateAsync(int id, {table}Request req);
+        Task DeleteAsync(int id);
     }}
 }}";
 
@@ -270,7 +280,7 @@ namespace Services
             _mapper = mapper;
         }}
 
-        public async Task<{table}Response> GetByIdAsync(Guid id) =>
+        public async Task<{table}Response> GetByIdAsync(int id) =>
             _mapper.Map<{table}Response>(await _repo.GetByIdAsync(id));
 
         public async Task<IEnumerable<{table}Response>> GetAllAsync() =>
@@ -284,7 +294,7 @@ namespace Services
             return _mapper.Map<{table}Response>(entity);
         }}
 
-        public async Task UpdateAsync(Guid id, {table}Request req)
+        public async Task UpdateAsync(int id, {table}Request req)
         {{
             var entity = await _repo.GetByIdAsync(id);
             if (entity == null) throw new Exception(""NotFound"");
@@ -293,7 +303,7 @@ namespace Services
             await _uow.SaveChangesAsync();
         }}
 
-        public async Task DeleteAsync(Guid id)
+        public async Task DeleteAsync(int id)
         {{
             await _repo.DeleteAsync(id);
             await _uow.SaveChangesAsync();
@@ -318,7 +328,7 @@ namespace Controllers
         public {table}Controller(I{table}Service service) => _service = service;
 
         [HttpGet(""{{id}}"")]
-        public async Task<IActionResult> Get(Guid id) => Ok(await _service.GetByIdAsync(id));
+        public async Task<IActionResult> Get(int id) => Ok(await _service.GetByIdAsync(id));
 
         [HttpGet]
         public async Task<IActionResult> GetAll() => Ok(await _service.GetAllAsync());
@@ -327,14 +337,14 @@ namespace Controllers
         public async Task<IActionResult> Create({table}Request req) => Ok(await _service.CreateAsync(req));
 
         [HttpPut(""{{id}}"")]
-        public async Task<IActionResult> Update(Guid id, {table}Request req)
+        public async Task<IActionResult> Update(int id, {table}Request req)
         {{
             await _service.UpdateAsync(id, req);
             return Ok();
         }}
 
         [HttpDelete(""{{id}}"")]
-        public async Task<IActionResult> Delete(Guid id)
+        public async Task<IActionResult> Delete(int id)
         {{
             await _service.DeleteAsync(id);
             return Ok();
@@ -372,22 +382,63 @@ namespace MappingProfiles
             return sb.ToString();
         }
 
-        static string GenerateBaseContext(List<string> tables)
+        public static string GenerateBaseContext(
+    string namespaceName,
+    Dictionary<string, List<string>> tableKeys,
+    Dictionary<string, List<(string Column, string RefTable, string RefColumn)>> tableFks)
         {
             var sb = new StringBuilder();
             sb.AppendLine("using Microsoft.EntityFrameworkCore;");
             sb.AppendLine("using Entities;");
-            sb.AppendLine("namespace Data");
+            sb.AppendLine();
+            sb.AppendLine($"namespace {namespaceName}");
             sb.AppendLine("{");
             sb.AppendLine("    public class BaseContext : DbContext");
             sb.AppendLine("    {");
             sb.AppendLine("        public BaseContext(DbContextOptions<BaseContext> options) : base(options) {}");
+            sb.AppendLine();
 
-            foreach (var t in tables)
+            foreach (var t in tableKeys.Keys)
                 sb.AppendLine($"        public DbSet<{t}> {t}Set {{ get; set; }}");
 
-                        sb.AppendLine("    }"); // đóng class
-            sb.AppendLine("}");     // đóng namespace
+            sb.AppendLine();
+            sb.AppendLine("        protected override void OnModelCreating(ModelBuilder modelBuilder)");
+            sb.AppendLine("        {");
+
+            // PK
+            foreach (var kv in tableKeys)
+            {
+                var keys = kv.Value;
+                sb.AppendLine($"            modelBuilder.Entity<{kv.Key}>()");
+                if (keys == null || keys.Count == 0)
+                {
+                    sb.AppendLine($"                .HasNoKey();");
+                }
+                else if (keys.Count == 1)
+                {
+                    sb.AppendLine($"                .HasKey(e => e.{keys[0]});");
+                }
+                else
+                {
+                    sb.AppendLine($"                .HasKey(e => new {{ {string.Join(", ", keys.Select(c => "e." + c))} }});");
+                }
+            }
+
+            // FK
+            foreach (var kv in tableFks)
+            {
+                foreach (var fk in kv.Value)
+                {
+                    sb.AppendLine($"            modelBuilder.Entity<{kv.Key}>()");
+                    sb.AppendLine($"                .HasOne<{fk.RefTable}>()");
+                    sb.AppendLine($"                .WithMany()");
+                    sb.AppendLine($"                .HasForeignKey(e => e.{fk.Column});");
+                }
+            }
+
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
 
             return sb.ToString();
         }
@@ -759,27 +810,77 @@ namespace UnitTests
 
             // Setup repository
             _repoMock.Setup(r => r.AddAsync(It.IsAny<{table}>())).ReturnsAsync(entity);
-            _repoMock.Setup(r => r.GetByIdAsync(It.IsAny<Guid>())).ReturnsAsync(entity);
+            _repoMock.Setup(r => r.GetByIdAsync(It.IsAny<int>())).ReturnsAsync(entity);
 
             // Create
             var created = await _service.CreateAsync(request);
             Assert.NotNull(created);
+            var random = new Random();
 
             // Get
-            var fetched = await _service.GetByIdAsync(Guid.NewGuid());
+            var fetched = await _service.GetByIdAsync(random.Next(1, int.MaxValue));
             Assert.NotNull(fetched);
 
             // Update
-            await _service.UpdateAsync(Guid.NewGuid(), request);
+            await _service.UpdateAsync(random.Next(1, int.MaxValue), request);
             _repoMock.Verify(r => r.UpdateAsync(entity), Times.Once);
 
             // Delete
-            _repoMock.Setup(r => r.DeleteAsync(It.IsAny<Guid>())).Returns(Task.CompletedTask);
-            await _service.DeleteAsync(Guid.NewGuid());
-            _repoMock.Verify(r => r.DeleteAsync(It.IsAny<Guid>()), Times.Once);
+            _repoMock.Setup(r => r.DeleteAsync(It.IsAny<int>())).Returns(Task.CompletedTask);
+            await _service.DeleteAsync(random.Next(1, int.MaxValue));
+            _repoMock.Verify(r => r.DeleteAsync(It.IsAny<int>()), Times.Once);
         }}
     }}
 }}";
+        }
+
+        static Dictionary<string, List<string>> GetTableKeys(SqlConnection conn)
+        {
+            var dict = new Dictionary<string, List<string>>();
+            string sql = @"
+        SELECT KU.TABLE_NAME, KU.COLUMN_NAME
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS TC
+        INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE KU
+            ON TC.CONSTRAINT_NAME = KU.CONSTRAINT_NAME
+        WHERE TC.CONSTRAINT_TYPE = 'PRIMARY KEY'";
+            using var cmd = new SqlCommand(sql, conn);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var table = r.GetString(0);
+                var col = r.GetString(1);
+                if (!dict.ContainsKey(table)) dict[table] = new List<string>();
+                dict[table].Add(col);
+            }
+            return dict;
+        }
+
+        static Dictionary<string, List<(string Column, string RefTable, string RefColumn)>> GetTableFks(SqlConnection conn)
+        {
+            var dict = new Dictionary<string, List<(string, string, string)>>();
+            string sql = @"
+        SELECT fk.name AS FKName, tp.name AS TableName, cp.name AS ColumnName,
+               tr.name AS RefTable, cr.name AS RefColumn
+        FROM sys.foreign_keys fk
+        INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+        INNER JOIN sys.tables tp ON fkc.parent_object_id = tp.object_id
+        INNER JOIN sys.columns cp ON fkc.parent_object_id = cp.object_id AND fkc.parent_column_id = cp.column_id
+        INNER JOIN sys.tables tr ON fkc.referenced_object_id = tr.object_id
+        INNER JOIN sys.columns cr ON fkc.referenced_object_id = cr.object_id AND fkc.referenced_column_id = cr.column_id";
+            using var cmd = new SqlCommand(sql, conn);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var table = r.GetString(1);
+                var col = r.GetString(2);
+                var refTable = r.GetString(3);
+                var refCol = r.GetString(4);
+
+                if (!dict.ContainsKey(table))
+                    dict[table] = new List<(string, string, string)>();
+                dict[table].Add((col, refTable, refCol));
+            }
+            return dict;
         }
 
         #endregion
