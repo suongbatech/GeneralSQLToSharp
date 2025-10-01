@@ -57,7 +57,7 @@ namespace SqlToCSharpFullGenerator
             // sau khi WriteFile AuthController.cs ...
             WriteFile("Helper", "IRefreshTokenStore.cs", GenerateIRefreshTokenStore());
             WriteFile("Helper", "InMemoryRefreshTokenStore.cs", GenerateInMemoryRefreshTokenStore());
-
+            WriteFile("Helper", "PagingResponse.cs", GeneratePagingResponse());
             // Tạo UnitTest mẫu cho bảng User
             var tablesUnitTest = tables;// new List<string> { "User", "UserRoles" };
             foreach (var tableUnitTest in tablesUnitTest)
@@ -169,6 +169,7 @@ namespace SqlToCSharpFullGenerator
         using System;
         using System.Collections.Generic;
         using System.Threading.Tasks;
+        using Helper;
 
         namespace IRepositories
         {{
@@ -179,6 +180,8 @@ namespace SqlToCSharpFullGenerator
                 Task<{table}> AddAsync({table} entity);
                 Task UpdateAsync({table} entity);
                 Task DeleteAsync(int id);
+                Task<PagingResponse<{table}>> GetListAsync(int page, int pageSize);
+
             }}
         }}";
 
@@ -190,6 +193,9 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using System.Linq.Expressions;
+using System.Linq;
+using Helper;
 
 namespace Repositories
 {{
@@ -230,6 +236,28 @@ namespace Repositories
                 await _context.SaveChangesAsync();
             }}
         }}
+    
+       public async Task<PagingResponse<{table}>> GetListAsync(int page, int pageSize) 
+        {{
+            var totalCount = await _db.CountAsync();
+            var keyProperty = typeof({table}).GetProperties().First(); // hoặc lấy pk chính xác
+            var param = Expression.Parameter(typeof({table}), ""x"");
+            var body = Expression.PropertyOrField(param, keyProperty.Name);
+            var orderByExpr = Expression.Lambda<Func<{table}, object>>(Expression.Convert(body, typeof(object)), param);
+
+            var items = await _db
+                .OrderBy(orderByExpr)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+                return new PagingResponse<{table}> 
+                    {{ 
+                        Results = items, 
+                        Total = totalCount, 
+                        Page = page, 
+                        PageSize = pageSize 
+                    }};
+         }}
     }}
 }}";
 
@@ -239,6 +267,7 @@ using Responses;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Helper;
 
 namespace IServices
 {{
@@ -249,6 +278,7 @@ namespace IServices
         Task<{table}Response> CreateAsync({table}Request req);
         Task UpdateAsync(int id, {table}Request req);
         Task DeleteAsync(int id);
+        Task<PagingResponse<{table}Response>> GetListAsync(int page, int pageSize);
     }}
 }}";
 
@@ -264,6 +294,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Helper;
 
 namespace Services
 {{
@@ -308,6 +339,16 @@ namespace Services
             await _repo.DeleteAsync(id);
             await _uow.SaveChangesAsync();
         }}
+        public async Task<PagingResponse<{table}Response>> GetListAsync(int page, int pageSize) 
+        {{ 
+            var list = await _repo.GetListAsync(page, pageSize); 
+            return new PagingResponse<{table}Response> 
+            {{
+                Results = list.Results .Select(entity => _mapper.Map<{table}Response>(entity)) .ToList(),
+                Total = list.Total, 
+                Page = list.Page,
+                PageSize = list.PageSize 
+        }}; }}
     }}
 }}";
 
@@ -348,6 +389,11 @@ namespace Controllers
         {{
             await _service.DeleteAsync(id);
             return Ok();
+        }}
+        [HttpGet(""all-paging"")] public async Task<IActionResult> GetList(int page = 1, int pageSize = 20)
+        {{ 
+            var response = await _service.GetListAsync(page, pageSize); 
+            return Ok(response); 
         }}
     }}
 }}";
@@ -797,12 +843,12 @@ namespace UnitTests
             _service = new {table}Service(_repoMock.Object, _uowMock.Object, _mapperMock.Object);
         }}
 
-        [Fact]
+       [Fact]
         public async Task Create_Get_Update_Delete_Workflow()
         {{
-            var request = new {table}Request();// TODO: Populate with test data
+            var request = new {table}Request(); // TODO: Populate with test data
             var entity = new {table}();
-            var response = new {table}Response();// TODO: Populate with test data
+            var response = new {table}Response(); // TODO: Populate with test data
 
             // Setup AutoMapper
             _mapperMock.Setup(m => m.Map<{table}>(It.IsAny<{table}Request>())).Returns(entity);
@@ -815,21 +861,21 @@ namespace UnitTests
             // Create
             var created = await _service.CreateAsync(request);
             Assert.NotNull(created);
-            var random = new Random();
+            Assert.Equal(response, created);
 
             // Get
-            var fetched = await _service.GetByIdAsync(random.Next(1, int.MaxValue));
+            var fetched = await _service.GetByIdAsync(1);
             Assert.NotNull(fetched);
 
             // Update
-            await _service.UpdateAsync(random.Next(1, int.MaxValue), request);
-            _repoMock.Verify(r => r.UpdateAsync(entity), Times.Once);
+            await _service.UpdateAsync(1, request);
+            _repoMock.Verify(r => r.UpdateAsync(It.IsAny<{table}>()), Times.Once);
 
             // Delete
-            _repoMock.Setup(r => r.DeleteAsync(It.IsAny<int>())).Returns(Task.CompletedTask);
-            await _service.DeleteAsync(random.Next(1, int.MaxValue));
-            _repoMock.Verify(r => r.DeleteAsync(It.IsAny<int>()), Times.Once);
+            await _service.DeleteAsync(1);
+            _repoMock.Verify(r => r.DeleteAsync(1), Times.Once);
         }}
+
     }}
 }}";
         }
@@ -882,6 +928,22 @@ namespace UnitTests
             }
             return dict;
         }
+        static string GeneratePagingResponse() => @" 
+                            using System; 
+                            using System.Collections.Generic; 
+                            using System.Linq;
+                            using System.Text; 
+                            using System.Threading.Tasks; 
+                            namespace Helper 
+                            {
+                            public class PagingResponse<T>
+                            { 
+                            public int Total { get; set; }
+                            public int Page { get; set; }
+                            public int? PageSize { get; set; }
+                            public IEnumerable<T>? Results { get; set; } = new List<T>(); 
+                            } 
+                            }";
 
         #endregion
 
