@@ -20,7 +20,7 @@ namespace SqlToCSharpFullGenerator
                 "IRepositories","Repositories",
                 "IServices","Services",
                 "Controllers","MappingProfiles",
-                "Data","SQL", "Helper", "UnitTest"
+                "Data","SQL", "Helper", "UnitTest","Exceptions"
             };
             foreach (var f in folders)
                 Directory.CreateDirectory(Path.Combine(OutputPath, f));
@@ -58,6 +58,11 @@ namespace SqlToCSharpFullGenerator
             WriteFile("Helper", "IRefreshTokenStore.cs", GenerateIRefreshTokenStore());
             WriteFile("Helper", "InMemoryRefreshTokenStore.cs", GenerateInMemoryRefreshTokenStore());
             WriteFile("Helper", "PagingResponse.cs", GeneratePagingResponse());
+           
+            WriteFile("Helper", "CurrentUserService.cs", GenerateCurrentUserService());
+            WriteFile("Exceptions", "BadRequestException.cs", GenerateBadRequestException());
+            
+
             // Tạo UnitTest mẫu cho bảng User
             var tablesUnitTest = tables;// new List<string> { "User", "UserRoles" };
             foreach (var tableUnitTest in tablesUnitTest)
@@ -585,6 +590,8 @@ namespace Data
             {
                 options.AddPolicy(""AdminOnly"", policy => policy.RequireRole(""Admin""));
             });
+            builder.Services.AddHttpContextAccessor();
+            builder.Services.AddSingleton<ICurrentUserService, CurrentUserService>();
             builder.Services.AddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
@@ -637,6 +644,130 @@ namespace Data
 }
 ";
 
+        static string GenerateBadRequestException() => @"namespace Exceptions
+{
+    public class BadRequestException : Exception
+    {
+        public string ErrorCode { get; } = string.Empty;
+        public BadRequestException()
+        {
+        }
+
+        public BadRequestException(string message) : base(message)
+        {
+
+        }
+
+        public BadRequestException(string message, string errorCode) : base(message)
+        {
+            ErrorCode = errorCode;
+        }
+
+        public BadRequestException(string message, Exception inner) : base(message, inner)
+        {
+        }
+    }
+}
+";
+        static string GenerateCurrentUserService() => @"using Microsoft.AspNetCore.Http;
+using System.Security.Claims;
+
+using Exceptions;
+namespace Helper
+{
+    public interface ICurrentUserService
+    {
+        int UserId { get; }
+        string Username { get; }
+        int NhanVienId { get; }
+        string MaNhanVien { get; }
+
+    }
+    public class CurrentUserService : ICurrentUserService
+    {
+        private readonly IHttpContextAccessor _httpContextAccessor;
+
+        public CurrentUserService(IHttpContextAccessor httpContextAccessor)
+        {
+            _httpContextAccessor = httpContextAccessor;
+        }
+
+        public IEnumerable<Claim> Claims
+        {
+            get
+            {
+                var claims = _httpContextAccessor.HttpContext?.User?.Claims;
+                if (claims == null || !claims.Any())
+                {
+                    throw new BadRequestException(""Không có thông tin đăng nhập."");
+                }
+                return claims;
+            }
+        }
+
+        public int UserId
+        {
+            get
+            {
+                var userIdClaim = Claims.Single(x => x.Type == ClaimConsts.UserId).Value;
+                if (string.IsNullOrEmpty(userIdClaim) || !int.TryParse(userIdClaim, out var userId))
+                {
+                    throw new BadRequestException(""Không có thông tin tài khoản đăng nhập."");
+                }
+                return userId;
+            }
+        }
+
+        public int NhanVienId
+        {
+            get
+            {
+                var nhanVienIdClaim = Claims.Single(x => x.Type == ClaimConsts.NhanVienId).Value;
+                if (string.IsNullOrEmpty(nhanVienIdClaim) || !int.TryParse(nhanVienIdClaim, out var nhanVienId))
+                {
+                    throw new BadRequestException(""Không có thông tin tài khoản đăng nhập."");
+                }
+                return nhanVienId;
+            }
+        }
+        public string MaNhanVien
+        {
+            get
+            {
+                var maNhanVienClaim = Claims.Single(x => x.Type == ClaimConsts.NhanVienId).Value;
+                if (string.IsNullOrEmpty(maNhanVienClaim))
+                {
+                    throw new BadRequestException(""Không có thông tin tài khoản đăng nhập."");
+                }
+                return maNhanVienClaim;
+            }
+        }
+
+        public string Username
+        {
+            get
+            {
+                string username = _httpContextAccessor.HttpContext?.User?.Identity?.Name ?? string.Empty;
+                if (string.IsNullOrEmpty(username))
+                {
+                    throw new BadRequestException(""Không có thông tin tài khoản đăng nhập."");
+                }
+                return username;
+            }
+        }
+    }
+    public static class ClaimConsts
+    {
+        public const string UserId = ""UserId"";
+        public const string Username = ""Username"";
+        public const string Roles = ""Roles"";
+        public const string MaNhanVien = ""MaNhanVien"";
+        public const string HoTen = ""HoTen"";
+        public const string NhanVienId = ""NhanVienId"";
+    }
+}
+
+";
         static string GenerateCsProj() => @"
             <Project Sdk=""Microsoft.NET.Sdk.Web"">
               <PropertyGroup>
